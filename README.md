@@ -1,58 +1,103 @@
-# SoccerNet Game State Recognition (sn-gamestate)
+# SoccerNet Game State Recognition (Modular GSR)
 
-This repository contains the implementation of the **SoccerNet Game State Reconstruction (GSR)** pipeline. The system is designed for end-to-end athlete tracking, identification, and pitch localization from broadcast football videos.
+A standalone, lightweight reimplementation of the SoccerNet Game State Reconstruction (GSR) baseline. This pipeline performs end-to-end athlete tracking, identification, and pitch localization from broadcast football videos.
 
-Unlike standard evaluation pipelines that require downloading the entire multi-gigabyte SoccerNet dataset, this implementation is configured to allow efficient, direct inference on single video clips or custom data.
+## 🚀 Key Features
 
-## Features
+- **Lightweight & Fast**: Uses YOLOv8n (Nano) and OSNet for efficient processing on standard hardware.
+- **Official GS-HOTA Evaluation**: Built-in benchmarking module strictly following the SoccerNet-GSR standards.
+- **Pitch Localization**: Maps players from 2D image coordinates to real-world pitch coordinates (meters).
+- **Modular Design**: Separated modules for Detection, Tracking, Team Classification, Jersey Recognition, and Refinement.
+- **No Heavy Dependencies**: Removed reliance on the complex TrackLab/Hydra framework for better transparency and speed.
 
-- **Single Video Inference**: Run the entire Game State Reconstruction pipeline directly on any standalone `.mp4` video without needing complex dataset hierarchies.
-- **End-to-End Pipeline**: Combines object detection, tracking (with Re-Identification), pitch localization, and camera calibration to map players from the 2D image plane to real-world pitch coordinates.
-- **Fast Mode Configuration**: Option to streamline the pipeline by skipping computationally heavy modules (like OCR for jersey numbers) to enable faster processing on standard hardware.
-- **Structured Outputs**: Parses the complex internal tracker state into clean, structured JSON containing bounding boxes, pitch coordinates, roles, and teams per frame.
+---
 
-## Environment Setup
+## 🛠️ Installation & Setup
 
-1. The core pipeline relies on the TrackLab framework. Ensure the `sn-gamestate` repository is correctly initialized within this directory.
-2. Install [uv](https://github.com/astral-sh/uv) for fast Python dependency management.
-3. Configure the virtual environment inside the `sn-gamestate` folder as per the standard TrackLab installation guidelines.
-
-## Running Inference on Custom Videos
-
-You can run the TrackLab pipeline on any raw `.mp4` video using the built-in `video` dataset loader. This completely removes the need to download the SoccerNet dataset.
-
-Navigate to the `sn-gamestate` directory and execute the pipeline via the command line:
-
+### 1. Create a Virtual Environment
 ```bash
-uv run tracklab -cn soccernet dataset=video "dataset.video_path='/absolute/path/to/your/video.mp4'" eval_tracking=False
+# Create the environment
+python -m venv .gsr_venv
+
+# Activate the environment (Windows)
+.gsr_venv\Scripts\activate
+
+# Activate the environment (Linux/macOS)
+source .gsr_venv/bin/activate
 ```
-*(Note: `eval_tracking=False` is crucial as it prevents the pipeline from crashing while looking for ground-truth annotations that do not exist for custom videos).*
 
-### Accelerated Inference (Fast Mode)
-
-The default pipeline includes computationally expensive steps like Jersey Number Detection and Tracklet Aggregation. To accelerate inference (e.g., for testing or running on a CPU), you can explicitly restrict the pipeline to core modules: detection, ReID, tracking, pitch localization, and camera calibration.
-
+### 2. Install Dependencies
 ```bash
-uv run tracklab -cn soccernet dataset=video "dataset.video_path='/absolute/path/to/your/video.mp4'" eval_tracking=False "pipeline=[bbox_detector,reid,track,pitch,calibration]"
+pip install -r requirements_pipeline.txt
 ```
 
-*Note: The `reid` module is strictly required when using the default `BPBReIDStrongSORT` tracker, as it relies on appearance embeddings.*
-
-## Programmatic API Execution
-
-For easier integration into larger projects, you can use the `api.py` and `test_api.py` scripts. These scripts programmatically trigger the TrackLab pipeline, manage the configuration overrides for you, and automatically parse the resulting `.pklz` tracker state into a usable JSON format.
-
-```python
-from api import GameStateRecognizer
-
-# Initialize the recognizer with the path to the sn-gamestate core
-recognizer = GameStateRecognizer(repo_dir=r"path/to/sn-gamestate")
-
-# Provide the path to a directory containing your video.mp4
-video_dir = r"path/to/video_folder"
-
-# Run the pipeline (fast_mode=True automatically configures the streamlined pipeline)
-result = recognizer.process_video(video_dir, fast_mode=True, max_frames=30)
+### 3. Setup Calibration Plugin
+The `nbjw_calib` package is required for pitch mapping.
+```bash
+cd gsr_pipeline/nbjw_calib
+pip install -e .
+cd ../..
 ```
 
-The resulting dictionary will contain the game state structured frame-by-frame, ready for downstream tactical analysis or visualization.
+---
+
+## 🏃 Usage
+
+### 1. Run Inference
+Process a SoccerNet sequence and generate predictions:
+```bash
+python -m gsr_pipeline.run --sequence_dir data/SoccerNetGS/gamestate-2024/valid/SNGS-021 --output_dir outputs/SNGS-021 --max_frames 50
+```
+- `--sequence_dir`: Path to the sequence folder (containing `img1/`).
+- `--output_dir`: Where to save `predictions.json` and `annotated_video.mp4`.
+- `--max_frames`: (Optional) Limit processing to the first N frames.
+
+### 2. Evaluate Performance (GS-HOTA)
+Calculate official metrics against ground truth:
+```bash
+python -m gsr_pipeline.evaluate --gt_path path/to/Labels-GameState.json --pred_path outputs/SNGS-021/predictions.json
+```
+This generates a detailed report including **DetA**, **AssA**, and the final **GS-HOTA** score.
+
+---
+
+## 📊 Evaluation Metrics
+
+The pipeline uses the **GS-HOTA** metric, which combines:
+- **DetA (Detection Accuracy)**: Measures how well players are localized and correctly identified (Role, Team, Jersey).
+- **AssA (Association Accuracy)**: Measures tracking consistency across frames.
+- **LocSim**: Gaussian similarity (tau=5m) for pitch localization.
+- **IdSim**: Binary matching for Role, Team, and Jersey Number.
+
+---
+
+## ⚙️ Configuration
+
+Module parameters (thresholds, model paths, clustering) are managed in:
+`gsr_pipeline/configs/default.yaml`
+
+Key settings:
+- `detector.conf_threshold`: Default is `0.25`.
+- `team.n_clusters`: Set to `3` (separates Team A, Team B, and Referees).
+- `reid.model_name`: Default is `osnet_x0_25`.
+
+---
+
+## 📂 Project Structure
+
+```text
+├── gsr_pipeline/          # Core pipeline source code
+│   ├── configs/           # YAML configuration files
+│   ├── detect.py          # YOLOv8 Athlete Detection
+│   ├── track.py           # Multi-Object Tracking
+│   ├── team.py            # KMeans Team/Referee Classification
+│   ├── jersey.py          # EasyOCR Jersey Recognition
+│   ├── evaluate.py        # GS-HOTA Metric Implementation
+│   └── run.py             # Main execution script
+├── data/                  # Dataset directory (SoccerNetGS)
+├── outputs/               # Prediction and visualization results
+└── requirements_pipeline.txt
+```
+
+## 📝 License
+This project follows the licensing of the original SoccerNet-GSR baseline and associated models (YOLOv8, TorchReID).
