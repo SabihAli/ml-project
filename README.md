@@ -28,7 +28,7 @@ source .gsr_venv/bin/activate
 
 ### 2. Install Dependencies
 ```bash
-pip install -r requirements_pipeline.txt
+pip install -r requirements.txt
 ```
 
 ### 3. Setup Calibration Plugin
@@ -96,7 +96,7 @@ Key settings:
 │   └── run.py             # Main execution script
 ├── data/                  # Dataset directory (SoccerNetGS)
 ├── outputs/               # Prediction and visualization results
-└── requirements_pipeline.txt
+└── requirements.txt
 ```
 
 ## 📝 License
