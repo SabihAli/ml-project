@@ -1,0 +1,47 @@
+# Default configuration for gsr_pipeline
+
+detector:
+  model_path: "yolov8n.pt"  # Nano model (~6MB)
+  conf_threshold: 0.25
+  iou_threshold: 0.45
+  device: "cpu"            # change to "cuda" if GPU available
+  batch_size: 8
+
+reid:
+  model_name: "osnet_x0_25"
+  weights_path: null       # null uses torchreid market1501 pretrained weights
+  device: "cpu"
+  batch_size: 32
+
+tracker:
+  track_high_thresh: 0.25
+  track_low_thresh: 0.1
+  new_track_thresh: 0.25
+  track_buffer: 30
+  match_thresh: 0.8
+
+calibration:
+  checkpoint_kp: "pretrained_models/calibration/SV_kp"
+  checkpoint_l: "pretrained_models/calibration/SV_lines"
+  image_width: 1920
+  image_height: 1080
+  device: "cpu"
+  use_prev_homography: true
+
+jersey:
+  gpu: false               # Set true if easyocr can use GPU
+  batch_size: 8
+
+team:
+  n_clusters: 3
+  random_state: 0
+
+refiner:
+  enabled: true
+  speed_threshold: 10.0
+  reid_threshold: 0.3
+  interpolation_limit: 15
+
+output:
+  save_video: true
+  save_json: true

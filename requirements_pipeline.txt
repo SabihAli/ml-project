@@ -1,0 +1,17 @@
+# Minimal requirements for gsr_pipeline
+ultralytics>=8.0.0
+torchreid
+gdown
+tensorboard
+easyocr>=1.7.0
+scikit-learn
+pandas
+numpy
+opencv-python
+pyyaml
+tqdm
+yacs
+pillow
+torch>=1.13.0
+torchvision
+# Note: nbjw_calib must be available (usually via pip install -e plugins/calibration)
