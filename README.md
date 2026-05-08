@@ -50,7 +50,13 @@ python -m gsr_pipeline.run --sequence_dir data/SoccerNetGS/gamestate-2024/valid/
 ```
 - `--sequence_dir`: Path to the sequence folder (containing `img1/`).
 - `--output_dir`: Where to save `predictions.json` and `annotated_video.mp4`.
-- `--max_frames`: (Optional) Limit processing to the first N frames.
+- `--max_frames`: (Optional) Limit the number of frames to process.
+- `--device`: (Optional) Set to `cuda` for GPU or `cpu` for CPU (default is config-defined).
+
+### Example with GPU
+```bash
+python -m gsr_pipeline.run --sequence_dir data/SoccerNetGS/gamestate-2024/valid/SNGS-021 --output_dir outputs/SNGS-021 --device cuda
+```
 
 ### 2. Evaluate Performance (GS-HOTA)
 Calculate official metrics against ground truth:
