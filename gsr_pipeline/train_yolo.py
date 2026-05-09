@@ -1,131 +1,368 @@
+"""
+train_yolo.py
+=============
+Two-phase script for YOLOv8n transfer learning on SoccerNet-GSR:
+
+Phase 1 – In-place YOLO conversion
+  • Reads each sequence's Labels-GameState.json
+  • Strips non-bounding-box annotations (pitch lines, camera metadata)
+  • Keeps only 'object' supercategory entries (player, goalkeeper, referee, ball)
+  • Writes one YOLO .txt label file per image directly into  seq/labels/<frame>.txt
+    (no image copying, no parallel directory tree)
+
+Phase 2 – Training
+  • Builds a dataset YAML that lists the original image directories
+  • Fine-tunes YOLOv8n on the converted dataset
+
+Usage
+-----
+# Test on a single sequence first:
+python train_yolo.py --mode convert_one --seq path/to/SNGS-060
+
+# Convert the full dataset:
+python train_yolo.py --mode convert_all
+
+# Train (assumes conversion already done):
+python train_yolo.py --mode train
+
+# All-in-one:
+python train_yolo.py --mode all
+"""
+
 import os
 import json
-import cv2
 import yaml
+import argparse
 from pathlib import Path
 from tqdm import tqdm
-import shutil
-import random
 
-def convert_gsr_to_yolo(root_dir, output_dir, split="train", sample_ratio=1.0):
+# ──────────────────────────────────────────────────────────────────────────────
+# Configuration – adjust these paths to match your environment
+# ──────────────────────────────────────────────────────────────────────────────
+ROOT_DIR   = Path("data/SoccerNetGS/gamestate-2024")   # dataset root
+YAML_OUT   = Path("data/gsr_yolo.yaml")                # dataset YAML for YOLO
+SPLITS     = ["train", "valid"]                        # splits to process
+
+# YOLOv8 training hyper-parameters
+TRAIN_CFG = dict(
+    model     = "yolov8n.pt",     # pretrained backbone (downloads automatically)
+    epochs    = 50,
+    imgsz     = 1280,             # SoccerNet frames are 1920×1080; keep aspect ratio
+    batch     = 8,                # lower if VRAM is tight
+    patience  = 10,               # early stopping
+    workers   = 4,
+    project   = "runs/gsr_yolo",
+    name      = "yolov8n_gsr",
+    exist_ok  = True,
+    device    = 0,                # 0 = first GPU; "cpu" for CPU-only
+)
+
+# Class mapping: YOLO class id → human label
+# We map the GSR category names to compact integer IDs
+ROLE_TO_ID = {
+    "player":     0,
+    "goalkeeper": 1,
+    "referee":    2,
+    "ball":       3,
+    "other":      4,
+}
+ID_TO_ROLE = {v: k for k, v in ROLE_TO_ID.items()}
+
+# GSR category_id → role name  (from the JSON 'categories' list)
+CAT_ID_TO_ROLE = {
+    1: "player",
+    2: "goalkeeper",
+    3: "referee",
+    4: "ball",
+    7: "other",
+}
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Phase 1: In-place YOLO label conversion
+# ══════════════════════════════════════════════════════════════════════════════
+
+def convert_sequence(seq_dir: Path, dry_run: bool = False) -> dict:
     """
-    Converts SoccerNet-GSR annotations to YOLO format.
-    
+    Convert a single sequence's Labels-GameState.json to per-frame YOLO .txt
+    files written into  seq_dir/labels/<frame>.txt.
+
+    Only bounding-box annotations (supercategory == 'object') are kept;
+    pitch-line and camera annotations are discarded.
+
     Args:
-        sample_ratio: Fraction of sequences to keep (e.g., 0.7 for 70%).
+        seq_dir : Path to a sequence directory (e.g., .../SNGS-060)
+        dry_run : If True, print what would be written but don't touch the disk.
+
+    Returns:
+        stats dict with keys: images_processed, annotations_kept, annotations_dropped
     """
-    img_out = Path(output_dir) / "images" / split
-    lbl_out = Path(output_dir) / "labels" / split
-    img_out.mkdir(parents=True, exist_ok=True)
-    lbl_out.mkdir(parents=True, exist_ok=True)
+    label_json = seq_dir / "Labels-GameState.json"
+    if not label_json.exists():
+        print(f"  [SKIP] No Labels-GameState.json in {seq_dir}")
+        return {}
 
-    split_dir = Path(root_dir) / split
-    all_sequences = [d for d in split_dir.iterdir() if d.is_dir()]
-    
-    if sample_ratio < 1.0:
-        num_to_keep = int(len(all_sequences) * sample_ratio)
-        sequences = random.sample(all_sequences, num_to_keep)
-        print(f"Sampling {num_to_keep}/{len(all_sequences)} sequences for {split} split...")
-    else:
-        sequences = all_sequences
+    with open(label_json, "r", encoding="utf-8") as f:
+        data = json.load(f)
 
-    role_to_id = {
-        "player": 0,
-        "goalkeeper": 1,
-        "referee": 2,
-        "ball": 3
-    }
+    # Build image_id → (file_name, width, height) lookup from the 'images' list
+    img_info = {}
+    for img in data.get("images", []):
+        img_info[img["image_id"]] = (
+            img["file_name"],
+            img.get("width",  1920),
+            img.get("height", 1080),
+        )
 
-    print(f"Processing {split} split ({len(sequences)} sequences)...")
+    # Group annotations by image_id; keep ONLY bounding-box (object) entries
+    bbox_anns: dict[str, list] = {}
+    kept = 0
+    dropped = 0
+    for ann in data.get("annotations", []):
+        if ann.get("supercategory") != "object":
+            dropped += 1
+            continue                       # skip pitch lines, camera, etc.
+        bbox = ann.get("bbox_image")
+        if not bbox:
+            dropped += 1
+            continue                       # no bounding box → skip
 
-    for seq in tqdm(sequences):
-        label_path = seq / "Labels-GameState.json"
-        if not label_path.exists():
+        img_id = ann["image_id"]
+        if img_id not in bbox_anns:
+            bbox_anns[img_id] = []
+        bbox_anns[img_id].append(ann)
+        kept += 1
+
+    # Create labels sub-directory
+    labels_dir = seq_dir / "labels"
+    if not dry_run:
+        labels_dir.mkdir(exist_ok=True)
+
+    images_processed = 0
+    for img_id, anns in bbox_anns.items():
+        file_name, img_w, img_h = img_info.get(
+            img_id, (f"{img_id}.jpg", 1920, 1080)
+        )
+        # Strip extension → use same stem for the .txt
+        stem = Path(file_name).stem               # e.g. "000001"
+        txt_path = labels_dir / f"{stem}.txt"
+
+        lines = []
+        for ann in anns:
+            bbox = ann["bbox_image"]              # x, y, w, h (top-left origin)
+            x, y, w, h = bbox["x"], bbox["y"], bbox["w"], bbox["h"]
+
+            # Normalise to YOLO format: cx cy w h  (all 0-1)
+            cx = (x + w / 2) / img_w
+            cy = (y + h / 2) / img_h
+            nw = w / img_w
+            nh = h / img_h
+
+            # Clamp to [0, 1] to guard against edge artefacts
+            cx = max(0.0, min(1.0, cx))
+            cy = max(0.0, min(1.0, cy))
+            nw = max(0.0, min(1.0, nw))
+            nh = max(0.0, min(1.0, nh))
+
+            # Resolve class id
+            cat_id = ann.get("category_id")
+            role   = CAT_ID_TO_ROLE.get(cat_id, "other")
+            # Also check attributes.role as fallback
+            if cat_id not in CAT_ID_TO_ROLE:
+                role = ann.get("attributes", {}).get("role", "other")
+            class_id = ROLE_TO_ID.get(role, 4)
+
+            lines.append(f"{class_id} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
+
+        if dry_run:
+            print(f"  [DRY] Would write {txt_path} ({len(lines)} boxes)")
+        else:
+            with open(txt_path, "w", encoding="utf-8") as f_out:
+                f_out.write("\n".join(lines) + ("\n" if lines else ""))
+
+        images_processed += 1
+
+    return dict(
+        images_processed   = images_processed,
+        annotations_kept   = kept,
+        annotations_dropped= dropped,
+    )
+
+
+def convert_one(seq_path: str, dry_run: bool = False):
+    """Convert a single sequence – used for testing before full rollout."""
+    seq_dir = Path(seq_path)
+    print(f"\n{'[DRY RUN] ' if dry_run else ''}Converting sequence: {seq_dir.name}")
+    stats = convert_sequence(seq_dir, dry_run=dry_run)
+    if stats:
+        print(f"  Images processed   : {stats['images_processed']}")
+        print(f"  BBox annotations   : {stats['annotations_kept']}")
+        print(f"  Non-bbox dropped   : {stats['annotations_dropped']}")
+        print(f"  Labels written to  : {seq_dir / 'labels'}")
+
+
+def convert_all(root_dir: Path = ROOT_DIR, splits: list = SPLITS):
+    """Convert every sequence in the given splits in-place."""
+    total_imgs = 0
+    total_kept = 0
+    total_drop = 0
+
+    for split in splits:
+        split_dir = root_dir / split
+        if not split_dir.exists():
+            print(f"[WARN] Split directory not found: {split_dir}")
             continue
 
-        with open(label_path, "r") as f:
-            data = json.load(f)
+        sequences = sorted(d for d in split_dir.iterdir() if d.is_dir())
+        print(f"\nConverting {split} split ({len(sequences)} sequences)…")
 
-        # Image info (SoccerNet frames are usually 1920x1080)
-        # Note: Some versions use a separate images.json, but GSR often embeds image_id
-        # We assume images are in seq / "img1" / "{image_id}.jpg"
-        
-        # Group annotations by image_id
-        ann_by_img = {}
-        for ann in data.get("annotations", []):
-            img_id = ann["image_id"]
-            if img_id not in ann_by_img:
-                ann_by_img[img_id] = []
-            ann_by_img[img_id].append(ann)
+        for seq in tqdm(sequences, desc=split):
+            stats = convert_sequence(seq)
+            if stats:
+                total_imgs += stats["images_processed"]
+                total_kept += stats["annotations_kept"]
+                total_drop += stats["annotations_dropped"]
 
-        for img_id, anns in ann_by_img.items():
-            # SoccerNet IDs are like "2021000001"
-            # Filenames in img1 are usually like "000001.jpg" or the full ID
-            # Let's check a sample sequence to confirm filename format
-            img_filename = f"{img_id}.jpg" # Default guess
-            src_img = seq / "img1" / img_filename
-            
-            if not src_img.exists():
-                # Try 6-digit suffix
-                img_filename = f"{img_id[-6:]}.jpg"
-                src_img = seq / "img1" / img_filename
-            
-            if not src_img.exists():
-                continue
+    print(f"\n{'─'*50}")
+    print(f"Conversion complete.")
+    print(f"  Total images    : {total_imgs}")
+    print(f"  BBox labels     : {total_kept}")
+    print(f"  Dropped (pitch/cam/no-bbox): {total_drop}")
 
-            # Target paths
-            target_img_name = f"{seq.name}_{img_id}.jpg"
-            target_img_path = img_out / target_img_name
-            target_lbl_path = lbl_out / (target_img_name.replace(".jpg", ".txt"))
 
-            # Copy image (or symlink)
-            shutil.copy(str(src_img), str(target_img_path))
+# ══════════════════════════════════════════════════════════════════════════════
+#  Phase 2: Dataset YAML + YOLOv8n training
+# ══════════════════════════════════════════════════════════════════════════════
 
-            # Write YOLO labels
-            # YOLO format: <class> <x_center> <y_center> <width> <height> (normalized 0-1)
-            with open(target_lbl_path, "w") as f_lbl:
-                for ann in anns:
-                    bbox = ann.get("bbox_image")
-                    if not bbox: continue
-                    
-                    role = ann.get("attributes", {}).get("role", "player")
-                    class_id = role_to_id.get(role, 0)
-                    
-                    # GSR bbox: x, y, w, h (usually top-left)
-                    # We need normalized center_x, center_y, w, h
-                    img_w, img_h = 1920, 1080 # Standard SoccerNet
-                    
-                    x = bbox["x"]
-                    y = bbox["y"]
-                    w = bbox["w"]
-                    h = bbox["h"]
-                    
-                    cx = (x + w/2) / img_w
-                    cy = (y + h/2) / img_h
-                    nw = w / img_w
-                    nh = h / img_h
-                    
-                    f_lbl.write(f"{class_id} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}\n")
+def collect_image_dirs(root_dir: Path, split: str) -> list[str]:
+    """
+    Collect all img1/ subdirectory paths for a given split.
+    YOLO's directory mode will look for paired .txt files in a sibling
+    'labels/' directory (i.e., seq/labels/<stem>.txt).
+    """
+    split_dir = root_dir / split
+    dirs = []
+    for seq in sorted(d for d in split_dir.iterdir() if d.is_dir()):
+        img_dir = seq / "img1"
+        if img_dir.exists():
+            dirs.append(str(img_dir.resolve()))
+    return dirs
 
-    return role_to_id
 
-def create_yaml(output_dir, role_to_id):
-    data = {
-        "path": str(Path(output_dir).absolute()),
-        "train": "images/train",
-        "val": "images/valid",
-        "names": {v: k for k, v in role_to_id.items()}
+def build_yaml(root_dir: Path = ROOT_DIR, yaml_out: Path = YAML_OUT):
+    """
+    Write a dataset YAML that Ultralytics can consume.
+
+    Because YOLO expects label files to live in a 'labels/' directory
+    that mirrors the 'images/' tree, and our images are in seq/img1/
+    while labels are in seq/labels/, we use the 'path:' + explicit
+    train/val lists approach with absolute image-directory listings.
+    """
+    train_dirs = collect_image_dirs(root_dir, "train")
+    valid_dirs = collect_image_dirs(root_dir, "valid")
+
+    dataset = {
+        # Absolute paths so the YAML is location-independent
+        "path" : str(root_dir.resolve()),
+        "train": train_dirs,
+        "val"  : valid_dirs,
+        "nc"   : len(ROLE_TO_ID),
+        "names": ID_TO_ROLE,
     }
-    with open(Path(output_dir) / "gsr_data.yaml", "w") as f:
-        yaml.dump(data, f)
+
+    yaml_out.parent.mkdir(parents=True, exist_ok=True)
+    with open(yaml_out, "w", encoding="utf-8") as f:
+        yaml.dump(dataset, f, default_flow_style=False, sort_keys=False)
+
+    print(f"\nDataset YAML written → {yaml_out}")
+    print(f"  Train sequences : {len(train_dirs)}")
+    print(f"  Valid sequences : {len(valid_dirs)}")
+    print(f"  Classes         : {ID_TO_ROLE}")
+
+
+def train(yaml_path: Path = YAML_OUT, cfg: dict = None):
+    """
+    Fine-tune YOLOv8n on the SoccerNet-GSR dataset.
+
+    Requires: pip install ultralytics
+    """
+    try:
+        from ultralytics import YOLO
+    except ImportError:
+        raise ImportError(
+            "ultralytics is not installed. Run:  pip install ultralytics"
+        )
+
+    if cfg is None:
+        cfg = TRAIN_CFG.copy()
+
+    model_weights = cfg.pop("model", "yolov8n.pt")
+    print(f"\nLoading model: {model_weights}")
+    model = YOLO(model_weights)
+
+    print(f"Starting training…  (YAML: {yaml_path})")
+    results = model.train(data=str(yaml_path), **cfg)
+    print(f"\nTraining complete. Results saved to: {results.save_dir}")
+    return results
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Entry point
+# ══════════════════════════════════════════════════════════════════════════════
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Convert SoccerNet-GSR annotations to YOLO format and train YOLOv8n."
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["convert_one", "convert_all", "build_yaml", "train", "all"],
+        default="convert_one",
+        help=(
+            "convert_one : test conversion on a single sequence (safe, no dataset-wide changes)\n"
+            "convert_all : convert every sequence in all splits in-place\n"
+            "build_yaml  : write the dataset YAML (after conversion)\n"
+            "train       : run YOLOv8n fine-tuning (needs conversion + yaml done)\n"
+            "all         : convert_all → build_yaml → train"
+        ),
+    )
+    parser.add_argument(
+        "--seq",
+        default="data/SoccerNetGS/gamestate-2024/train/SNGS-060",
+        help="Path to a single sequence directory (used with --mode convert_one)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print what would be done without writing any files (convert_one only)",
+    )
+    parser.add_argument(
+        "--root",
+        default=str(ROOT_DIR),
+        help="Root dataset directory (overrides ROOT_DIR constant)",
+    )
+    return parser.parse_args()
+
 
 if __name__ == "__main__":
-    # Example usage for 70% dataset reduction:
-    root = "data/SoccerNetGS/gamestate-2024"
-    out = "data/yolo_gsr_70pct"
-    
-    role_id_map = convert_gsr_to_yolo(root, out, split="train", sample_ratio=1.0)
-    convert_gsr_to_yolo(root, out, split="valid", sample_ratio=1.0) # Keep all validation
-    
-    create_yaml(out, role_id_map)
-    print(f"Done! 70% of training data prepared in {out}")
+    args = parse_args()
+    root = Path(args.root)
+
+    if args.mode == "convert_one":
+        convert_one(args.seq, dry_run=args.dry_run)
+
+    elif args.mode == "convert_all":
+        convert_all(root_dir=root)
+
+    elif args.mode == "build_yaml":
+        build_yaml(root_dir=root)
+
+    elif args.mode == "train":
+        build_yaml(root_dir=root)   # always regenerate YAML before training
+        train()
+
+    elif args.mode == "all":
+        convert_all(root_dir=root)
+        build_yaml(root_dir=root)
+        train()
