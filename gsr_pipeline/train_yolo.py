@@ -39,7 +39,7 @@ from tqdm import tqdm
 # ──────────────────────────────────────────────────────────────────────────────
 # Configuration – adjust these paths to match your environment
 # ──────────────────────────────────────────────────────────────────────────────
-ROOT_DIR   = Path("data/GSR_Subset_65")   # dataset root
+ROOT_DIR   = Path("GSR_Subset_65")   # dataset root
 YAML_OUT   = Path("gsr_yolo.yaml")                # dataset YAML for YOLO
 SPLITS     = ["train", "valid"]                        # splits to process
 
