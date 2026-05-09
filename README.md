@@ -37,7 +37,17 @@ The `nbjw_calib` package is required for pitch mapping.
 cd gsr_pipeline/nbjw_calib
 pip install -e .
 cd ../..
+cd ../..
 ```
+
+## 📓 Google Colab Setup
+If you are running on Google Colab, follow these steps to ensure GPU support:
+1. **Change Runtime**: Go to `Runtime` > `Change runtime type` > `Hardware accelerator` > **T4 GPU**.
+2. **Installation**: Colab comes with `torch` pre-installed. To avoid overwriting it with a CPU version, run:
+   ```bash
+   pip install ultralytics torchreid easyocr yacs
+   # Then install the calibration plugin as usual
+   ```
 
 ---
 
@@ -50,13 +60,7 @@ python -m gsr_pipeline.run --sequence_dir data/SoccerNetGS/gamestate-2024/valid/
 ```
 - `--sequence_dir`: Path to the sequence folder (containing `img1/`).
 - `--output_dir`: Where to save `predictions.json` and `annotated_video.mp4`.
-- `--max_frames`: (Optional) Limit the number of frames to process.
-- `--device`: (Optional) Set to `cuda` for GPU or `cpu` for CPU (default is config-defined).
-
-### Example with GPU
-```bash
-python -m gsr_pipeline.run --sequence_dir data/SoccerNetGS/gamestate-2024/valid/SNGS-021 --output_dir outputs/SNGS-021 --device cuda
-```
+- `--max_frames`: (Optional) Limit processing to the first N frames.
 
 ### 2. Evaluate Performance (GS-HOTA)
 Calculate official metrics against ground truth:

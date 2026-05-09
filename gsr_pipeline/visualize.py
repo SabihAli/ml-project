@@ -127,8 +127,14 @@ def draw_pitch_minimap(
         
         team = row.get("team", "unknown")
         role = row.get("role", "unknown")
-        color = COLORS.get(team, COLORS["unknown"])
-        if role == "goalkeeper": color = COLORS["goalkeeper"]
+        
+        # Color logic
+        if role == "ball":
+            color = COLORS["ball"]
+        elif role == "goalkeeper":
+            color = COLORS["goalkeeper"]
+        else:
+            color = COLORS.get(team, COLORS["unknown"])
         
         cv2.circle(minimap, (mx, my), 5, color, -1)
         cv2.circle(minimap, (mx, my), 5, (0, 0, 0), 1)

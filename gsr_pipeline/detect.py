@@ -33,6 +33,7 @@ class YOLOv8nDetector:
         self,
         model_path: str = "yolov8n.pt",
         conf_threshold: float = 0.25,
+        ball_conf_threshold: float = 0.15,
         iou_threshold: float = 0.45,
         device: str = "cpu",
         batch_size: int = 8,
@@ -42,7 +43,8 @@ class YOLOv8nDetector:
         Args:
             model_path:      Path to a .pt weights file or an ultralytics model
                              name (e.g. 'yolov8n.pt').  Will auto-download.
-            conf_threshold:  Minimum detection confidence.
+            conf_threshold:  Minimum detection confidence for people.
+            ball_conf_threshold: Minimum detection confidence for the ball.
             iou_threshold:   NMS IoU threshold.
             device:          Torch device string ('cpu', 'cuda', 'cuda:0', …).
             batch_size:      Number of frames to process per forward pass.
@@ -53,14 +55,15 @@ class YOLOv8nDetector:
 
         self.model = YOLO(model_path)
         self.conf_threshold = conf_threshold
+        self.ball_conf_threshold = ball_conf_threshold
         self.iou_threshold = iou_threshold
         self.device = device
         self.batch_size = batch_size
         self.classes = classes if classes is not None else [_PERSON_CLASS, _BALL_CLASS]
 
         log.info(
-            "YOLOv8nDetector loaded: model=%s  conf=%.2f  device=%s",
-            model_path, conf_threshold, device,
+            "YOLOv8nDetector loaded: model=%s  conf=%.2f  ball_conf=%.2f  device=%s",
+            model_path, conf_threshold, ball_conf_threshold, device,
         )
 
     # ------------------------------------------------------------------
@@ -92,9 +95,12 @@ class YOLOv8nDetector:
 
     def _run_batch(self, batch: List[np.ndarray]) -> List[pd.DataFrame]:
         """Run YOLO on one batch of frames (BGR numpy arrays)."""
+        # Run with the lower of the two thresholds to capture both
+        min_conf = min(self.conf_threshold, self.ball_conf_threshold)
+        
         results = self.model(
             batch,
-            conf=self.conf_threshold,
+            conf=min_conf,
             iou=self.iou_threshold,
             classes=self.classes,
             device=self.device,
@@ -113,6 +119,12 @@ class YOLOv8nDetector:
                 x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                 conf = float(box.conf[0].cpu())
                 cls = int(box.cls[0].cpu())
+                
+                # Apply class-specific filtering
+                target_conf = self.ball_conf_threshold if cls == _BALL_CLASS else self.conf_threshold
+                if conf < target_conf:
+                    continue
+                    
                 rows.append(
                     {
                         "bbox_ltwh": (float(x1), float(y1), float(x2 - x1), float(y2 - y1)),
