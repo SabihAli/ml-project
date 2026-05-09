@@ -39,7 +39,7 @@ from tqdm import tqdm
 # ──────────────────────────────────────────────────────────────────────────────
 # Configuration – adjust these paths to match your environment
 # ──────────────────────────────────────────────────────────────────────────────
-ROOT_DIR   = Path("GSR_Subset_65")   # dataset root
+ROOT_DIR   = Path("data/GSR_Subset_65")   # dataset root
 YAML_OUT   = Path("gsr_yolo.yaml")                # dataset YAML for YOLO
 SPLITS     = ["train", "valid"]                        # splits to process
 
@@ -138,6 +138,20 @@ def convert_sequence(seq_dir: Path, dry_run: bool = False) -> dict:
     labels_dir = seq_dir / "labels"
     if not dry_run:
         labels_dir.mkdir(exist_ok=True)
+
+    # YOLO requirement: images must be in a directory named 'images' (not 'img1')
+    # for it to automatically find the sibling 'labels' directory.
+    img1_dir = seq_dir / "img1"
+    images_dir = seq_dir / "images"
+    if img1_dir.exists() and not images_dir.exists():
+        if dry_run:
+            print(f"  [DRY] Would rename {img1_dir.name} -> {images_dir.name}")
+        else:
+            img1_dir.rename(images_dir)
+            print(f"  [MOVE] Renamed {img1_dir.name} -> {images_dir.name}")
+    elif not images_dir.exists() and not img1_dir.exists():
+        print(f"  [SKIP] No image directory found in {seq_dir}")
+        return {}
 
     images_processed = 0
     for img_id, anns in bbox_anns.items():
@@ -244,7 +258,11 @@ def collect_image_dirs(root_dir: Path, split: str) -> list[str]:
     split_dir = root_dir / split
     dirs = []
     for seq in sorted(d for d in split_dir.iterdir() if d.is_dir()):
-        img_dir = seq / "img1"
+        # Look for 'images' (renamed) or 'img1' (original)
+        img_dir = seq / "images"
+        if not img_dir.exists():
+            img_dir = seq / "img1"
+            
         if img_dir.exists():
             dirs.append(str(img_dir.resolve()))
     return dirs
