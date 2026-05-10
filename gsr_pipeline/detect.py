@@ -21,9 +21,11 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
-# COCO class IDs we care about
-_PERSON_CLASS = 0
-_BALL_CLASS = 32
+# GSR class IDs from your fine-tuned model (train_yolo.py)
+_PLAYER_CLASS = 0
+_GK_CLASS = 1
+_REFEREE_CLASS = 2
+_BALL_CLASS = 3
 
 
 class YOLOv8nDetector:
@@ -59,7 +61,7 @@ class YOLOv8nDetector:
         self.iou_threshold = iou_threshold
         self.device = device
         self.batch_size = batch_size
-        self.classes = classes if classes is not None else [_PERSON_CLASS, _BALL_CLASS]
+        self.classes = classes if classes is not None else [_PLAYER_CLASS, _GK_CLASS, _REFEREE_CLASS, _BALL_CLASS]
 
         log.info(
             "YOLOv8nDetector loaded: model=%s  conf=%.2f  ball_conf=%.2f  device=%s",

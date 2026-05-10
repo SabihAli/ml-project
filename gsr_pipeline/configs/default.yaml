@@ -1,7 +1,7 @@
 # Default configuration for gsr_pipeline
 
 detector:
-  model_path: "yolov8n.pt"  # Nano model (~6MB)
+  model_path: "yolov8n_gsr.pt"  # Nano model (~6MB)
   conf_threshold: 0.25
   ball_conf_threshold: 0.15
   iou_threshold: 0.45

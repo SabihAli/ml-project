@@ -31,7 +31,9 @@ wheels/
 .ipynb_checkpoints
 
 # ML/Data
-data/
+data/**
+!data/SoccerNetGS/gamestate-2024/valid_sample/
+!data/SoccerNetGS/gamestate-2024/valid_sample/**
 outputs/
 pretrained_models/
 *.pt

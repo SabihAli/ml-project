@@ -131,6 +131,8 @@ def draw_pitch_minimap(
         # Color logic
         if role == "ball":
             color = COLORS["ball"]
+        elif role == "referee":
+            color = COLORS["referee"]
         elif role == "goalkeeper":
             color = COLORS["goalkeeper"]
         else:

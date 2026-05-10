@@ -4,9 +4,16 @@ run.py — CLI entry point for the gsr_pipeline.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to allow running as a script
+root_dir = Path(__file__).resolve().parent.parent
+if str(root_dir) not in sys.path:
+    sys.path.insert(0, str(root_dir))
+
 import argparse
 import logging
-from pathlib import Path
 import yaml
 
 from gsr_pipeline.pipeline import GSRPipeline

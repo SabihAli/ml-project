@@ -82,6 +82,32 @@ def crop_bbox(img: np.ndarray, l: int, t: int, r: int, b: int) -> np.ndarray:
     return crop
 
 
+def get_color_histogram(crop_bgr: np.ndarray) -> np.ndarray:
+    """Extract a small HSV histogram from the center part of a crop (torso area).
+    
+    Returns a normalized 1D feature vector.
+    """
+    if crop_bgr.size == 0:
+        return np.zeros(32, dtype=np.float32)
+
+    # Focus on the torso (middle 50% height, middle 80% width)
+    h, w = crop_bgr.shape[:2]
+    t, b = int(h * 0.2), int(h * 0.7)
+    l, r = int(w * 0.1), int(w * 0.9)
+    torso = crop_bgr[t:b, l:r]
+
+    if torso.size == 0:
+        return np.zeros(32, dtype=np.float32)
+
+    hsv = cv2.cvtColor(torso, cv2.COLOR_BGR2HSV)
+    
+    # 8 bins for H, 4 for S, 4 for V = 128 dimensions? 
+    # Let's keep it smaller: 8 for H, 4 for S = 32 dimensions (ignore V to be light-robust)
+    hist = cv2.calcHist([hsv], [0, 1], None, [8, 4], [0, 180, 0, 256])
+    cv2.normalize(hist, hist)
+    return hist.flatten()
+
+
 # ---------------------------------------------------------------------------
 # Pandas helpers
 # ---------------------------------------------------------------------------

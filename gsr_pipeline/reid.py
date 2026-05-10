@@ -22,13 +22,15 @@ from typing import List, Optional
 import numpy as np
 import pandas as pd
 
-from gsr_pipeline.utils import ltwh_to_ltrb, crop_bbox, bgr_to_rgb
+from gsr_pipeline.utils import ltwh_to_ltrb, crop_bbox, bgr_to_rgb, get_color_histogram
 
 log = logging.getLogger(__name__)
 
-# COCO class IDs
-_PERSON_CLASS = 0
-_BALL_CLASS = 32
+# GSR class IDs from your fine-tuned model
+_PLAYER_CLASS = 0
+_GK_CLASS = 1
+_REFEREE_CLASS = 2
+_BALL_CLASS = 3
 
 # Image size expected by OSNet
 _REID_HEIGHT = 256
@@ -110,6 +112,7 @@ class OSNetReID:
         """
         if detections_df.empty:
             detections_df["embeddings"] = pd.Series(dtype=object)
+            detections_df["color_features"] = pd.Series(dtype=object)
             detections_df["role_detection"] = pd.Series(dtype=str)
             detections_df["role_confidence"] = pd.Series(dtype=float)
             return detections_df
@@ -120,19 +123,28 @@ class OSNetReID:
         # Assign heuristic roles first (no forward pass needed)
         roles, role_confs = self._assign_roles(detections_df, img_h, img_w)
 
-        # Crop person detections for ReID
-        crops = []
+        # Crop person detections for ReID and Color
+        crops_rgb = []
+        crops_bgr = []
         for _, row in detections_df.iterrows():
             l, t, w, h = row["bbox_ltwh"]
             l, t, r, b = ltwh_to_ltrb(l, t, w, h)
-            crop = crop_bbox(image_rgb, int(l), int(t), int(r), int(b))
-            crops.append(crop)
+            
+            crop_rgb = crop_bbox(image_rgb, int(l), int(t), int(r), int(b))
+            crops_rgb.append(crop_rgb)
+            
+            crop_bgr = crop_bbox(image_bgr, int(l), int(t), int(r), int(b))
+            crops_bgr.append(crop_bgr)
 
         # Extract embeddings in batches
-        embeddings = self._extract_embeddings(crops)
+        embeddings = self._extract_embeddings(crops_rgb)
+        
+        # Extract color histograms
+        color_feats = [get_color_histogram(c) for c in crops_bgr]
 
         detections_df = detections_df.copy()
         detections_df["embeddings"] = list(embeddings)
+        detections_df["color_features"] = color_feats
         detections_df["role_detection"] = roles
         detections_df["role_confidence"] = role_confs
         return detections_df
@@ -192,20 +204,20 @@ class OSNetReID:
         img_area = img_h * img_w
 
         for _, row in detections_df.iterrows():
-            cls = int(row.get("class_id", _PERSON_CLASS))
-            l, t, w, h = row["bbox_ltwh"]
-            bbox_area = w * h
-
+            cls = int(row.get("class_id", _PLAYER_CLASS))
+            
             if cls == _BALL_CLASS:
                 roles.append("ball")
                 confs.append(0.95)
-            elif bbox_area < 0.0005 * img_area:
-                # Very small detection — likely the ball
-                roles.append("ball")
-                confs.append(0.70)
+            elif cls == _REFEREE_CLASS:
+                roles.append("referee")
+                confs.append(0.90)
+            elif cls == _GK_CLASS:
+                roles.append("goalkeeper")
+                confs.append(0.90)
             else:
-                # Default to player; goalkeeper upgraded in team.py
+                # Default to player
                 roles.append("player")
-                confs.append(0.60)
+                confs.append(0.80)
 
         return roles, confs
