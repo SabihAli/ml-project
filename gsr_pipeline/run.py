@@ -46,6 +46,8 @@ def main():
         cfg["detector"]["device"] = args.device
         cfg["reid"]["device"] = args.device
         cfg["calibration"]["device"] = args.device
+        # EasyOCR uses a boolean flag
+        cfg["jersey"]["gpu"] = ("cuda" in args.device or "gpu" in args.device)
     
     if args.no_refine:
         cfg["refiner"]["enabled"] = False
