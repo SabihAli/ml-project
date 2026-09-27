@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "exported_utc": "2026-09-26T08:24:00Z",
+  "source_checkpoint": "best.pt",
+  "source_sha256": "cdc88829a48064a169cd1663d673a75910fa4e2a9fe2bce48f57edcf2dd10e5c",
+  "onnx_sha256": "a6a2ff90e9e1d82e16010bc8ef19c7019511cdb29b6692c43a9d2a2ed57db183",
+  "imgsz": {
+    "height": 1280,
+    "width": 1280
+  },
+  "names": {
+    "0": "athlete",
+    "1": "ball"
+  },
+  "stride": [
+    8,
+    16,
+    32
+  ],
+  "end2end": false,
+  "nms": {
+    "embedded": false,
+    "iou": 0.7,
+    "max_det": 300
+  },
+  "input": {
+    "name": "images",
+    "shape": [
+      1,
+      3,
+      1280,
+      1280
+    ]
+  },
+  "output": {
+    "name": "output0",
+    "shape": [
+      1,
+      6,
+      33600
+    ],
+    "layout": "xywh+cls",
+    "channels": 6
+  },
+  "opset": 17,
+  "versions": {
+    "ultralytics": "8.4.114",
+    "torch": "2.13.0+cpu",
+    "onnx": "1.23.0"
+  }
+}

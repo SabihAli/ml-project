@@ -8,6 +8,31 @@ detector:
   device: "cpu"            # change to "cuda" if GPU available
   batch_size: 8
 
+detector_b:
+  # Path B's 2-class athlete/ball detector (gsr_pipeline/detect_athlete.py), per the
+  # 2026-09-23 decision in docs/DETECTOR_AND_DATA_BLOCKERS.md. Separate from `detector`
+  # above so Path A stays runnable as the baseline until Phase 9 removes it
+  # (docs/path_b_implementation/IMPLEMENTATION_PLAN.md 12).
+  #
+  # Not yet wired into GSRPipeline -- used by evaluate_detection.py --path b. The live
+  # pipeline picks it up in Phase 2.
+  onnx_path: "model_testing/yolo26s_athlete_ball/best_736x1280.onnx"
+                           # 736x1280 is 16:9 at stride 32; a 1280x1280 square would pad
+                           # ~44% wasted compute. best_1280x1280.onnx is also exported, for
+                           # the parity gate's square-vs-rectangular A/B (plan 3.4).
+  athlete_conf: 0.25       # people recall/precision 96.2% / 94.3% on SNGS-021 open play
+  ball_conf: 0.15          # deliberately lower: the ball is the weakest class and every
+                           # ball-based event depends on it. 0.15 gives 78.6% / 71.3%
+                           # open-play recall/precision; 0.25 trades recall for precision.
+  device: "cuda:0"         # ignored on the CPU tier
+  backend: null            # null walks the fallback chain (tensorrt -> ort_gpu -> ort_cpu).
+                           # Pin a tier only to debug or to force the degraded path; a
+                           # pinned tier that is unavailable raises instead of falling back.
+  batch_size: 8
+  # NMS iou (0.7) and max_det (300) are NOT set here. They come from the ONNX sidecar,
+  # which carries the training config's values -- keeping them in one place stops the
+  # runtime and the parity gate's reference from drifting apart (plan 3.5).
+
 reid:
   model_name: "osnet_x0_25"
   weights_path: null       # null uses torchreid market1501 pretrained weights
