@@ -6,11 +6,14 @@ Replaces the heavy PRTReId / BPBreID stack from the original baseline.
 Design:
 - Uses torchreid's FeatureExtractor with osnet_x0_25 (market1501 pretrained).
 - Extracts a 512-d embedding per detection crop.
-- Role classification is done heuristically (bbox size / aspect ratio).
+- Role classification is a direct pass-through of the fine-tuned detector's
+  class_id (player / goalkeeper / referee / ball) -- see `_assign_roles`.
+  No appearance-based heuristic is needed since detect.py's model already
+  distinguishes these classes.
 
 Output columns added to the per-frame DataFrame:
     embeddings          np.ndarray of shape (512,)
-    role_detection      one of {'ball', 'player', 'goalkeeper', 'referee', 'other'}
+    role_detection      one of {'ball', 'player', 'goalkeeper', 'referee'}
     role_confidence     float in [0, 1]
 """
 
@@ -41,8 +44,8 @@ class OSNetReID:
     """
     Lightweight ReID feature extractor using torchreid OSNet-x0_25.
 
-    Also performs heuristic role classification (ball vs. player vs. referee
-    vs. goalkeeper) because we no longer have the PRTReId multi-task head.
+    Also assigns role_detection (ball / player / goalkeeper / referee) by
+    passing through the fine-tuned detector's class_id -- see `_assign_roles`.
     """
 
     def __init__(
@@ -150,6 +153,50 @@ class OSNetReID:
         return detections_df
 
     # ------------------------------------------------------------------
+    # Split entry points for process_stream's latency-decoupled path
+    # (see docs/architecture/STREAMING_ARCHITECTURE.md §1.7.6) -- additive, `process_frame`
+    # above is unchanged and remains the single call the batch path uses.
+    # ------------------------------------------------------------------
+
+    def assign_roles(self, detections_df: pd.DataFrame, img_h: int, img_w: int):
+        """Public wrapper around the cheap, no-forward-pass role assignment
+        (`_assign_roles`) -- the part of `process_frame` safe to run inline
+        in a latency-critical per-frame loop, since it does no ReID
+        inference. Returns (roles, role_confidences), same as `_assign_roles`.
+        """
+        return self._assign_roles(detections_df, img_h, img_w)
+
+    def extract_appearance_features(self, image_bgr: np.ndarray, detections_df: pd.DataFrame) -> pd.DataFrame:
+        """Compute ONLY the expensive parts (ReID embeddings + color
+        histograms) -- assumes role assignment already happened separately
+        (via `assign_roles`). Intended to run off the main per-frame thread
+        (see reid_worker_pool.py), decoupled from the fast detect->track->
+        calibrate path so position/role events are never gated behind the
+        ReID forward pass.
+        """
+        if detections_df.empty:
+            out = detections_df.copy()
+            out["embeddings"] = pd.Series(dtype=object)
+            out["color_features"] = pd.Series(dtype=object)
+            return out
+
+        image_rgb = bgr_to_rgb(image_bgr)
+        crops_rgb, crops_bgr = [], []
+        for _, row in detections_df.iterrows():
+            l, t, w, h = row["bbox_ltwh"]
+            l, t, r, b = ltwh_to_ltrb(l, t, w, h)
+            crops_rgb.append(crop_bbox(image_rgb, int(l), int(t), int(r), int(b)))
+            crops_bgr.append(crop_bbox(image_bgr, int(l), int(t), int(r), int(b)))
+
+        embeddings = self._extract_embeddings(crops_rgb)
+        color_feats = [get_color_histogram(c) for c in crops_bgr]
+
+        out = detections_df.copy()
+        out["embeddings"] = list(embeddings)
+        out["color_features"] = color_feats
+        return out
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
@@ -185,19 +232,14 @@ class OSNetReID:
     def _assign_roles(
         detections_df: pd.DataFrame, img_h: int, img_w: int
     ):
-        """Heuristic role assignment without a classification head.
+        """Role assignment via direct pass-through of the detector's class_id.
 
-        Rules (applied in order):
-            1. class_id == _BALL_CLASS → 'ball' (conf 0.95)
-            2. bbox area < 1% of image → 'ball' (small distant ball, conf 0.7)
-            3. aspect ratio (h/w) < 1.2  → 'referee' (wider stance, conf 0.5)
-               Actually referees vs players are hard without a head, so we
-               default everyone to 'player' with low confidence and let the
-               downstream tracklet aggregation/voting decide.
-            4. Everything else → 'player' (conf 0.6)
-
-        Goalkeeper assignment is deferred to `team.py` which can use the
-        pitch coordinate to identify the player closest to each goal.
+        The fine-tuned detector (detect.py, yolov8n_gsr.pt) already
+        distinguishes player / goalkeeper / referee / ball as separate
+        classes, so role_detection here is just that class_id remapped to a
+        string label plus a fixed per-class confidence. No further
+        goalkeeper or referee inference happens downstream (team.py only
+        clusters "player" tracklets into two teams).
         """
         roles = []
         confs = []

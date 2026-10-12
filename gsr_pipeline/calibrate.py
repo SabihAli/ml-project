@@ -113,8 +113,93 @@ def _make_line_cfg():
     return cfg
 
 
+NBJW_INPUT_HW = (540, 960)
+KP_THRESHOLD, LINE_THRESHOLD = 0.1449, 0.2983     # NBJW's heatmap score floors
+NBJW_BACKENDS = ("torch", "auto", "tensorrt", "ort_gpu", "ort_cpu")
+
+
+def load_nbjw_models(checkpoint_kp: str, checkpoint_l: str, device: str = "cpu"):
+    """The two NBJW torch models (keypoints, lines), eval mode, on `device`."""
+    import torch
+    from gsr_pipeline.nbjw_calib.model.cls_hrnet import get_cls_net
+    from gsr_pipeline.nbjw_calib.model.cls_hrnet_l import get_cls_net as get_cls_net_l
+
+    _ensure_download(_KP_URL, Path(checkpoint_kp))
+    _ensure_download(_LINES_URL, Path(checkpoint_l))
+
+    model_kp = get_cls_net(_make_kp_cfg())
+    model_kp.load_state_dict(torch.load(checkpoint_kp, map_location=device))
+    model_l = get_cls_net_l(_make_line_cfg())
+    model_l.load_state_dict(torch.load(checkpoint_l, map_location=device))
+    return model_kp.to(device).eval(), model_l.to(device).eval()
+
+
+class _TorchNet:
+    """Eager torch forward with the same `.infer(x)` shape as OrtRunner / TrtRunner."""
+
+    def __init__(self, model, device: str, fp16: bool = False) -> None:
+        import torch
+        self.model = model
+        self.device = torch.device(device)
+        self.fp16 = fp16
+        self.backend_name = "torch_fp16" if fp16 else "torch"
+
+    def infer(self, x):
+        import torch
+        with torch.inference_mode():
+            if self.fp16:
+                with torch.autocast(device_type="cuda", dtype=torch.float16):
+                    return self.model(x).float()
+            return self.model(x)
+
+
+def _nbjw_runner(onnx_path: Optional[str], backend: str, device: str, torch_model, fp16: bool):
+    """Pick the forward-pass backend for one NBJW network.
+
+    `auto` tries TensorRT (an engine next to the ONNX, built by scripts/export_nbjw.py
+    --build_engine and checked against its sidecar), then ONNX Runtime GPU, then torch.
+    An explicitly named backend that cannot load raises instead of falling back.
+    """
+    on_cuda = str(device).startswith("cuda")
+    if backend == "torch" or (backend == "auto" and not onnx_path):
+        return _TorchNet(torch_model, device, fp16=fp16 and on_cuda)
+    if not onnx_path:
+        raise ValueError(f"calibration backend {backend!r} needs onnx_kp / onnx_l paths")
+
+    from gsr_pipeline.runtime.backend import sha256_file
+
+    onnx = Path(onnx_path)
+    engine = onnx.with_name(f"{onnx.stem}_fp16.engine")
+    tiers = ["tensorrt", "ort_gpu", "torch"] if backend == "auto" else [backend]
+    errors = []
+    for tier in tiers:
+        try:
+            if tier == "tensorrt":
+                from gsr_pipeline.runtime.trt_runner import TrtRunner, check_sidecar
+                if not engine.exists():
+                    raise FileNotFoundError(f"no engine at {engine}")
+                check_sidecar(engine, sha256_file(onnx))
+                return TrtRunner(engine, device=device if on_cuda else "cuda:0")
+            if tier in ("ort_gpu", "ort_cpu"):
+                from gsr_pipeline.runtime.ort_runner import OrtRunner
+                return OrtRunner(onnx, device="cuda:0" if tier == "ort_gpu" else "cpu")
+            return _TorchNet(torch_model, device, fp16=fp16 and on_cuda)
+        except Exception as exc:  # noqa: BLE001 -- each tier fails for its own reasons
+            if backend != "auto":
+                raise
+            errors.append(f"{tier}: {exc}")
+            log.info("NBJW %s: tier %s unavailable (%s)", onnx.name, tier, exc)
+    raise RuntimeError("no NBJW backend could load: " + "; ".join(errors))
+
+
 class NBJWKeypointDetector:
-    """Detects pitch keypoints and line endpoints using two HRNet models."""
+    """Detects pitch keypoints and line endpoints using two HRNet models.
+
+    The networks run through `backend`: "torch" (eager, the accuracy reference), the
+    exported ONNX via "tensorrt" / "ort_gpu" / "ort_cpu", or "auto" (TensorRT, then ORT GPU,
+    then torch). Preprocessing (BGR->RGB, resize to 960x540, scale to [0, 1]) runs on the
+    network's device, so only the uint8 frame crosses the bus.
+    """
 
     def __init__(
         self,
@@ -123,71 +208,104 @@ class NBJWKeypointDetector:
         image_width: int = 1920,
         image_height: int = 1080,
         device: str = "cpu",
+        backend: str = "torch",
+        onnx_kp: Optional[str] = None,
+        onnx_l: Optional[str] = None,
+        fp16: bool = False,
+        fast_decode: bool = True,
     ) -> None:
         import torch
-        import torchvision.transforms as T
-        from gsr_pipeline.nbjw_calib.model.cls_hrnet import get_cls_net
-        from gsr_pipeline.nbjw_calib.model.cls_hrnet_l import get_cls_net as get_cls_net_l
+
+        self.fast_decode = fast_decode
+        if backend not in NBJW_BACKENDS:
+            raise ValueError(f"calibration backend must be one of {NBJW_BACKENDS}, got {backend!r}")
+        if str(device).startswith("cuda") and not torch.cuda.is_available():
+            log.warning("calibration device %s requested but CUDA is unavailable; using cpu", device)
+            device = "cpu"
 
         self.device = device
-        _ensure_download(_KP_URL, Path(checkpoint_kp))
-        _ensure_download(_LINES_URL, Path(checkpoint_l))
+        self.model_kp, self.model_l = load_nbjw_models(checkpoint_kp, checkpoint_l, device)
+        self.net_kp = _nbjw_runner(onnx_kp, backend, device, self.model_kp, fp16)
+        self.net_l = _nbjw_runner(onnx_l, backend, device, self.model_l, fp16)
+        self.input_device = self.net_kp.device
+        log.info("NBJWKeypointDetector ready: %s, input on %s", self.backend_name, self.input_device)
 
-        state = torch.load(checkpoint_kp, map_location=device)
-        self.model_kp = get_cls_net(_make_kp_cfg())
-        self.model_kp.load_state_dict(state)
-        self.model_kp.to(device).eval()
+    @property
+    def backend_name(self) -> str:
+        return f"{self.net_kp.backend_name}/{self.net_l.backend_name}"
 
-        state_l = torch.load(checkpoint_l, map_location=device)
-        self.model_l = get_cls_net_l(_make_line_cfg())
-        self.model_l.load_state_dict(state_l)
-        self.model_l.to(device).eval()
+    def preprocess(self, image_bgr: np.ndarray):
+        """uint8 HxWx3 BGR -> float32 1x3x540x960 RGB in [0, 1], on the network's device.
 
-        self.tfm = T.Compose([T.Resize((540, 960)), T.ToTensor()])
-        log.info("NBJWKeypointDetector ready on %s", device)
+        Antialiased bilinear matches the PIL resize the NBJW reference used (torchvision
+        Resize on a PIL image); the one difference is that PIL rounds the resized pixels to
+        uint8 before scaling, a <=1/255 step.
+        """
+        import torch
+        import torch.nn.functional as F
+
+        x = torch.from_numpy(np.ascontiguousarray(image_bgr)).to(self.input_device, non_blocking=True)
+        x = x.permute(2, 0, 1).flip(0).unsqueeze(0).float().div_(255.0)
+        if tuple(x.shape[-2:]) != NBJW_INPUT_HW:
+            x = F.interpolate(x, size=NBJW_INPUT_HW, mode="bilinear", align_corners=False, antialias=True)
+        return x.contiguous()
+
+    def forward(self, x):
+        """Both networks on one preprocessed batch; returns (hm_kp, hm_l)."""
+        return self.net_kp.infer(x), self.net_l.infer(x)
+
+    def decode(self, hm_kp, hm_l, fast: Optional[bool] = None) -> Dict:
+        """Heatmaps -> completed, normalised keypoint dict. `fast` (default: the detector's
+        `fast_decode`) picks nbjw_fast_decode over the vendored reference; both give the same
+        keypoints, which scripts/parity_pipeline.py checks on real frames."""
+        fast = self.fast_decode if fast is None else fast
+        h, w = NBJW_INPUT_HW
+        if fast:
+            from gsr_pipeline import nbjw_fast_decode as dec
+            kp_raw = dec.coords_to_dict(dec.peaks_kp(hm_kp[:, :-1]), threshold=KP_THRESHOLD)
+            l_raw = dec.coords_to_dict(dec.peaks_lines(hm_l[:, :-1]), threshold=LINE_THRESHOLD)
+            final = dec.complete_keypoints(kp_raw, l_raw, w=w, h=h, normalize=True)
+        else:
+            from gsr_pipeline.nbjw_calib.utils.utils_heatmap import (
+                get_keypoints_from_heatmap_batch_maxpool,
+                get_keypoints_from_heatmap_batch_maxpool_l,
+                complete_keypoints,
+                coords_to_dict,
+            )
+            kp_raw = coords_to_dict(get_keypoints_from_heatmap_batch_maxpool(hm_kp[:, :-1, :, :]),
+                                    threshold=KP_THRESHOLD)
+            l_raw = coords_to_dict(get_keypoints_from_heatmap_batch_maxpool_l(hm_l[:, :-1, :, :]),
+                                   threshold=LINE_THRESHOLD)
+            final = complete_keypoints(kp_raw, l_raw, w=w, h=h, normalize=True)
+        return final[0] if final else {}
 
     def detect(self, image_bgr: np.ndarray) -> Tuple[Dict, Dict]:
-        import torch
-        from PIL import Image
-        from gsr_pipeline.nbjw_calib.utils.utils_heatmap import (
-            get_keypoints_from_heatmap_batch_maxpool,
-            get_keypoints_from_heatmap_batch_maxpool_l,
-            complete_keypoints,
-            coords_to_dict,
-        )
-
-        img = Image.fromarray(image_bgr[:, :, ::-1]).convert("RGB")
-        t = self.tfm(img).unsqueeze(0).to(self.device)
-
-        with torch.no_grad():
-            hm_kp = self.model_kp(t)
-            hm_l = self.model_l(t)
-
-        kp_raw = coords_to_dict(
-            get_keypoints_from_heatmap_batch_maxpool(hm_kp[:, :-1, :, :]),
-            threshold=0.1449,
-        )
-        l_raw = coords_to_dict(
-            get_keypoints_from_heatmap_batch_maxpool_l(hm_l[:, :-1, :, :]),
-            threshold=0.2983,
-        )
-        final = complete_keypoints(kp_raw, l_raw, w=t.size(-1), h=t.size(-2), normalize=True)
-        keypoints = final[0] if final else {}
+        hm_kp, hm_l = self.forward(self.preprocess(image_bgr))
+        keypoints = self.decode(hm_kp, hm_l)
         return keypoints, _kp_to_lines(keypoints)
 
 
 class NBJWHomography:
-    """Computes a pitch homography from NBJW keypoints."""
+    """Computes a pitch homography (image pixels -> pitch metres) from NBJW keypoints.
+
+    `compute_cam_params` additionally runs NBJW's `heuristic_voting`: 18 full
+    `cv2.calibrateCamera` fits (3 modes x 6 RANSAC thresholds) to recover camera
+    intrinsics/pose. Projection never uses them -- only the homography -- and they only
+    feed the `camera_parameters` passthrough field of predictions.json, so they are off by
+    default; they were most of calibration's per-frame cost.
+    """
 
     def __init__(
         self,
         image_width: int = 1920,
         image_height: int = 1080,
         use_prev_homography: bool = True,
+        compute_cam_params: bool = False,
     ) -> None:
         from gsr_pipeline.nbjw_calib.utils.utils_calib import FramebyFrameCalib
         self.cam = FramebyFrameCalib(image_width, image_height, denormalize=True)
         self.use_prev = use_prev_homography
+        self.compute_cam_params = compute_cam_params
         self._last_h: Optional[np.ndarray] = None
         self._last_params: Dict = {}
 
@@ -195,7 +313,10 @@ class NBJWHomography:
         self.cam.update(keypoints)
         h = self.cam.get_homography_from_ground_plane(use_ransac=50, inverse=True)
         if h is not None:
-            params = self.cam.heuristic_voting()["cam_params"]
+            params = {}
+            if self.compute_cam_params:
+                voted = self.cam.heuristic_voting()
+                params = voted["cam_params"] if voted else {}
             if self.use_prev:
                 self._last_h, self._last_params = h, params
             return h, params
@@ -220,24 +341,30 @@ def project_detections(
         detections_df["bbox_pitch"] = None
         return detections_df
 
-    pitches = []
-    for _, row in detections_df.iterrows():
-        l, t, w, ht = row["bbox_ltwh"]
-        r, b = l + w, t + ht
-        try:
-            pbl = _unproject(h, [l, b])
-            pbr = _unproject(h, [r, b])
-            pbm = _unproject(h, [l + w / 2, b])
-            if np.any(np.isnan([*pbl[:2], *pbr[:2], *pbm[:2]])):
-                pitches.append(None)
-            else:
-                pitches.append({
-                    "x_bottom_left": float(pbl[0]), "y_bottom_left": float(pbl[1]),
-                    "x_bottom_right": float(pbr[0]), "y_bottom_right": float(pbr[1]),
-                    "x_bottom_middle": float(pbm[0]), "y_bottom_middle": float(pbm[1]),
-                })
-        except Exception:
-            pitches.append(None)
+    if detections_df.empty:
+        detections_df["bbox_pitch"] = None
+        return detections_df
 
+    # One batched transform of the three bottom points of every box (same maths as
+    # _unproject, which stays for single points).
+    ltwh = np.asarray(detections_df["bbox_ltwh"].tolist(), dtype=np.float64).reshape(-1, 4)
+    l, t, w, ht = ltwh.T
+    b = t + ht
+    pts = np.stack([
+        np.stack([l, b], 1), np.stack([l + w, b], 1), np.stack([l + w / 2, b], 1),
+    ], 1)                                                      # (N, 3, 2)
+    homog = np.concatenate([pts, np.ones(pts.shape[:2] + (1,))], -1) @ np.asarray(h, np.float64).T
+    with np.errstate(divide="ignore", invalid="ignore"):
+        proj = homog[..., :2] / homog[..., 2:3]                # (N, 3, 2)
+    ok = np.isfinite(proj).all(axis=(1, 2))
+
+    pitches = [
+        {
+            "x_bottom_left": float(p[0, 0]), "y_bottom_left": float(p[0, 1]),
+            "x_bottom_right": float(p[1, 0]), "y_bottom_right": float(p[1, 1]),
+            "x_bottom_middle": float(p[2, 0]), "y_bottom_middle": float(p[2, 1]),
+        } if good else None
+        for p, good in zip(proj, ok)
+    ]
     detections_df["bbox_pitch"] = pitches
     return detections_df

@@ -2,7 +2,7 @@
 gsr_pipeline.runtime -- backend-agnostic inference runners.
 
 Path B replaces the per-call Ultralytics `YOLO(...)` hot path with thin runners that own
-their own buffers (docs/path_b_implementation/IMPLEMENTATION_PLAN.md section 3.3). Three
+their own buffers (docs/path_b/plans/IMPLEMENTATION_PLAN.md section 3.3). Three
 tiers, tried in order by `backend.select_backend`: TensorRT FP16, ONNX Runtime GPU, ONNX
 Runtime CPU.
 

@@ -129,7 +129,13 @@ class OrtRunner:
             shape=tuple(out.shape),
             buffer_ptr=out.data_ptr(),
         )
+        # ORT runs on its own CUDA stream, torch on another. Without these two syncs ORT can
+        # read an input torch has not finished writing, and torch can read an output ORT has
+        # not finished writing: heatmaps then match in a bulk comparison yet decode to
+        # different keypoints (seen on NBJW, 540x960 on a T4).
+        torch.cuda.current_stream(self.device).synchronize()
         self.session.run_with_iobinding(binding)
+        binding.synchronize_outputs()
         return out
 
     def close(self) -> None:

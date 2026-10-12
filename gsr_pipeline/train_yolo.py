@@ -347,7 +347,7 @@ def parse_args():
     )
     parser.add_argument(
         "--seq",
-        default="data/SoccerNetGS/gamestate-2024/train/SNGS-060",
+        default="data/datasets/SoccerNetGS/gamestate-2024/train/SNGS-060",
         help="Path to a single sequence directory (used with --mode convert_one)",
     )
     parser.add_argument(

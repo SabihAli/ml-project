@@ -2,7 +2,7 @@
 detect_athlete.py -- Path B's 2-class athlete/ball detector.
 
 Replaces detect.py's 4-class YOLOv8n (Path A) per the 2026-09-23 decision in
-docs/DETECTOR_AND_DATA_BLOCKERS.md. Two differences matter beyond the class list:
+docs/path_b/DETECTOR_AND_DATA_BLOCKERS.md. Two differences matter beyond the class list:
 
   * **No Ultralytics on the hot path.** detect.py calls `YOLO(...)` and then loops over
     boxes calling `.cpu()` on each, where every call is a GPU synchronisation. Here the
@@ -48,7 +48,7 @@ class AthleteBallDetector:
 
     def __init__(
         self,
-        onnx_path: str = "model_testing/yolo26s_athlete_ball/best_736x1280.onnx",
+        onnx_path: str = "runs/yolo26s_athlete_ball/best_736x1280.onnx",
         athlete_conf: float = 0.25,
         ball_conf: float = 0.15,
         device: str = "cuda:0",

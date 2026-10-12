@@ -22,8 +22,8 @@ Frames are read in batches, not all loaded into memory up front
 
 Usage:
     python -m gsr_pipeline.evaluate_detection \\
-        --sequence_dir data/SoccerNetGS/gamestate-2024/valid_sample/SNGS-021 \\
-        --output_json outputs/SNGS-021_detection_eval.json
+        --sequence_dir data/datasets/SoccerNetGS/gamestate-2024/valid/SNGS-021 \\
+        --output_json data/outputs/SNGS-021_detection_eval.json
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ from .detect import YOLOv8nDetector
 CLASS_NAMES = {0: "player", 1: "goalkeeper", 2: "referee", 3: "ball"}
 PERSON_ROLES = ("player", "goalkeeper", "referee")
 
-# Path B: the 2-class athlete/ball detector (docs/DETECTOR_AND_DATA_BLOCKERS.md 2026-09-23).
+# Path B: the 2-class athlete/ball detector (docs/path_b/DETECTOR_AND_DATA_BLOCKERS.md 2026-09-23).
 # It emits no roles at all -- player/goalkeeper/referee are recovered downstream by
 # athlete_roles.py -- so scoring folds every GT person role into one "athlete" class and
 # compares class-agnostically, which is how the blockers doc's section 2 table was built.
@@ -312,7 +312,7 @@ class UltralyticsReferenceDetector:
     """The `.pt` through Ultralytics itself -- the reference side of the parity gate.
 
     Exists so both sides of the comparison go through one scoring harness. It deliberately
-    uses the TRAINING config's iou=0.7 and max_det=300 (model_testing/.../args.yaml), NOT
+    uses the TRAINING config's iou=0.7 and max_det=300 runs/yolo26s_athlete_ball/args.yaml, NOT
     detect.py's Path A iou_threshold=0.45: comparing a runner tuned to one NMS setting
     against a reference tuned to another measures the settings, not the runner.
     """
@@ -408,9 +408,9 @@ def main() -> None:
                         help="Path B only. Pin one backend instead of walking the fallback "
                              "chain. 'ultralytics' runs the .pt through Ultralytics itself, "
                              "which is the reference side of the parity gate (plan 3.5)")
-    parser.add_argument("--onnx", default="model_testing/yolo26s_athlete_ball/best_736x1280.onnx",
+    parser.add_argument("--onnx", default="runs/yolo26s_athlete_ball/best_736x1280.onnx",
                         help="Path B: the exported ONNX to score")
-    parser.add_argument("--weights", default="model_testing/yolo26s_athlete_ball/best.pt",
+    parser.add_argument("--weights", default="runs/yolo26s_athlete_ball/best.pt",
                         help="Path B: the .pt, used only by --backend ultralytics")
     parser.add_argument("--athlete_conf", type=float, default=0.25)
     parser.add_argument("--ball_conf", type=float, default=0.15)

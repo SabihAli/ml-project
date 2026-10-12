@@ -127,8 +127,11 @@ def build_engine(
     onnx_path, engine_path = Path(onnx_path), Path(engine_path)
     logger = trt.Logger(trt.Logger.INFO)
     builder = trt.Builder(logger)
+    # TensorRT 10 removed the EXPLICIT_BATCH flag: every network is explicit-batch, and
+    # create_network() takes no flag. Older versions still need it.
+    explicit_batch = getattr(trt.NetworkDefinitionCreationFlag, "EXPLICIT_BATCH", None)
     network = builder.create_network(
-        1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
+        0 if explicit_batch is None else 1 << int(explicit_batch)
     )
     parser = trt.OnnxParser(network, logger)
     if not parser.parse(onnx_path.read_bytes()):
@@ -138,7 +141,9 @@ def build_engine(
     config = builder.create_builder_config()
     config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, int(workspace_gb * (1 << 30)))
     if fp16:
-        if not builder.platform_has_fast_fp16:
+        # platform_has_fast_fp16 was removed in newer TensorRT 10 releases; the check is
+        # advisory only, so a missing attribute means "no information", not "no FP16".
+        if getattr(builder, "platform_has_fast_fp16", True) is False:
             log.warning("platform reports no fast FP16; building anyway")
         config.set_flag(trt.BuilderFlag.FP16)
     try:

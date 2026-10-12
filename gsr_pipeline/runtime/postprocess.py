@@ -2,7 +2,7 @@
 postprocess.py -- preprocessing and post-processing shared by every backend tier.
 
 One implementation for TensorRT, ONNX Runtime GPU and ONNX Runtime CPU
-(docs/path_b_implementation/IMPLEMENTATION_PLAN.md sections 3.2-3.3). The tiers therefore
+(docs/path_b/plans/IMPLEMENTATION_PLAN.md sections 3.2-3.3). The tiers therefore
 differ only in how the forward pass runs, which is what lets the parity gate (section 3.5)
 attribute a discrepancy to the backend rather than to arithmetic that drifted between
 copies of the same logic.

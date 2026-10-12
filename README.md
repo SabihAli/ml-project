@@ -1,113 +1,164 @@
-# SoccerNet Game State Recognition (Modular GSR)
+# cv_service: SoccerNet Game State Reconstruction
 
-A standalone, lightweight reimplementation of the SoccerNet Game State Reconstruction (GSR) baseline. This pipeline performs end-to-end athlete tracking, identification, and pitch localization from broadcast football videos.
+The computer-vision service of BallKnowledge. It turns broadcast football video into game state:
+every player, goalkeeper, referee and the ball, with track IDs, pitch positions in metres, roles,
+teams and jersey numbers. It runs as a batch pipeline over recorded clips, or live behind an
+HTTP + WebSocket API that `data_ingestion` consumes.
 
-## 🚀 Key Features
+The pipeline (`gsr_pipeline`) is a lightweight reimplementation of the SoccerNet GSR baseline:
+YOLO detection, ByteTrack, NBJW pitch calibration, OSNet appearance, EasyOCR jerseys, and the
+official GS-HOTA metric. How it works and how well: `docs/architecture/GSR_PIPELINE.md`.
 
-- **Lightweight & Fast**: Uses YOLOv8n (Nano) and OSNet for efficient processing on standard hardware.
-- **Official GS-HOTA Evaluation**: Built-in benchmarking module strictly following the SoccerNet-GSR standards.
-- **Pitch Localization**: Maps players from 2D image coordinates to real-world pitch coordinates (meters).
-- **Modular Design**: Separated modules for Detection, Tracking, Team Classification, Jersey Recognition, and Refinement.
-- **No Heavy Dependencies**: Removed reliance on the complex TrackLab/Hydra framework for better transparency and speed.
+Two detectors exist:
+- **Path A** (default): 4-class YOLOv8n, `yolov8n_gsr.pt` at the repo root.
+- **Path B** (in progress): 2-class YOLO26s athlete/ball, in `runs/yolo26s_athlete_ball/`,
+  with roles and teams recovered downstream. Status: `docs/path_b/plans/IMPLEMENTATION_PLAN.md` §12.1.
+
+**Path B is the primary direction (2026-10-12).** Path A is being retired: it is removed in
+Phase 9 of the Path B plan (§12.2). Don't build new work on Path A.
+
+Agent-facing repo guidance: `AGENTS.md`.
 
 ---
 
-## 🛠️ Installation & Setup
+## Setup
 
-### 1. Create a Virtual Environment
 ```bash
-# Create the environment
 python -m venv .gsr_venv
+source .gsr_venv/bin/activate            # Linux/macOS
+# .gsr_venv\Scripts\activate             # Windows
 
-# Activate the environment (Windows)
-.gsr_venv\Scripts\activate
-
-# Activate the environment (Linux/macOS)
-source .gsr_venv/bin/activate
-```
-
-### 2. Install Dependencies
-```bash
+# On a CUDA machine, install PyTorch for your CUDA version first (https://pytorch.org).
 pip install -r requirements.txt
+pip install -e gsr_pipeline/nbjw_calib   # vendored pitch-calibration package (required)
 ```
 
-### 3. Setup Calibration Plugin
-The `nbjw_calib` package is required for pitch mapping.
+Calibration checkpoints download from Zenodo on first run into `data/pretrained_models/calibration/`.
+GPU hosts that run Path B on TensorRT install `onnxruntime-gpu` and `tensorrt` in place of
+`onnxruntime` (see `requirements.txt`).
+
+Data: SoccerNet GSR (`gamestate-2024`). No dataset is in git; see
+`docs/guides/BALL_TEMPORAL_GUIDE.md` §3 for downloading the `train` and `valid` splits. The examples below assume
+they are under `data/datasets/SoccerNetGS/gamestate-2024/`.
+
+---
+
+## Usage
+
+### Batch: run a sequence, then score it
+
 ```bash
-cd gsr_pipeline/nbjw_calib
-pip install -e .
-cd ../..
-cd ../..
+python -m gsr_pipeline.run --sequence_dir data/datasets/SoccerNetGS/gamestate-2024/valid/SNGS-021 --output_dir data/outputs/SNGS-021 --max_frames 50
+python -m gsr_pipeline.evaluate --gt_path data/datasets/SoccerNetGS/gamestate-2024/valid/SNGS-021/Labels-GameState.json --pred_path data/outputs/SNGS-021/predictions.json
 ```
 
-## 📓 Google Colab Setup
-If you are running on Google Colab, follow these steps to ensure GPU support:
-1. **Change Runtime**: Go to `Runtime` > `Change runtime type` > `Hardware accelerator` > **T4 GPU**.
-2. **Installation**: Colab comes with `torch` pre-installed. To avoid overwriting it with a CPU version, run:
-   ```bash
-   pip install ultralytics torchreid easyocr yacs
-   # Then install the calibration plugin as usual
-   ```
+`run.py` flags: `--config` (default `gsr_pipeline/configs/default.yaml`), `--save_video` (writes
+`annotated.mp4`), `--no-refine`, `--device cpu|cuda`. `evaluate.py` reports DetA, AssA and
+GS-HOTA.
 
----
+### Detector alone, per class
 
-## 🏃 Usage
-
-### 1. Run Inference
-Process a SoccerNet sequence and generate predictions:
 ```bash
-python -m gsr_pipeline.run --sequence_dir data/SoccerNetGS/gamestate-2024/valid/SNGS-021 --output_dir outputs/SNGS-021 --max_frames 50
+python -m gsr_pipeline.evaluate_detection --sequence_dir data/datasets/SoccerNetGS/gamestate-2024/valid/SNGS-021 --output_json data/outputs/SNGS-021_detection_eval.json
 ```
-- `--sequence_dir`: Path to the sequence folder (containing `img1/`).
-- `--output_dir`: Where to save `predictions.json` and `annotated_video.mp4`.
-- `--max_frames`: (Optional) Limit processing to the first N frames.
 
-### 2. Evaluate Performance (GS-HOTA)
-Calculate official metrics against ground truth:
+Recall and precision per class (people on IoU, the ball on centre distance), the role confusion
+table, and ball frame recall with the longest miss. Add `--path b --backend ort_cpu --device cpu`
+for the Path B detector, and `--start_frame 168` to skip SNGS-021's kickoff.
+
+### Path B tools
+
 ```bash
-python -m gsr_pipeline.evaluate --gt_path path/to/Labels-GameState.json --pred_path outputs/SNGS-021/predictions.json
+python scripts/export_athlete_detector.py          # ONNX export (ultralytics>=8.4.0)
+python scripts/build_trt_engine.py                 # TensorRT engine, on the GPU host only
+python scripts/parity_gate.py --frames_per_sequence 30 --backend ort_cpu --device cpu
+python notebooks/path_b_eval.py --data_root <valid dir> --output_dir <out> --limit 3 --max_frames 100   # CUDA host
 ```
-This generates a detailed report including **DetA**, **AssA**, and the final **GS-HOTA** score.
+
+### Live service (HTTP + WebSocket)
+
+```bash
+CV_SERVICE_API_KEY=some-secret python -m uvicorn api.main:app --host 0.0.0.0 --port 8000
+```
+
+`POST /streams`, `POST /streams/{id}/stop`, `GET /health`, and a WS event feed at
+`/streams/{id}/events`. The key is required: the service refuses every request without it. End
+to end checks, with the server running: `python -m api.validate_api ...` and
+`python -m api.validate_ws ...` (see `AGENTS.md`). Design:
+`docs/architecture/STREAMING_ARCHITECTURE.md`.
+
+### Possession and turnovers (batch, from predictions.json)
+
+```bash
+python -m gsr_pipeline.possession_demo --json_path data/outputs/SNGS-021/predictions.json --output_path data/outputs/SNGS-021/possession_events.json
+```
+
+### Ball specialist work
+
+Step-by-step: `docs/guides/BALL_TEMPORAL_GUIDE.md` (local GPU) or
+`docs/guides/BALL_TEMPORAL_KAGGLE_GUIDE.md` (Kaggle). Plan: `docs/path_b/plans/BALL_TEMPORAL_PLAN.md`.
+
+### Tests
+
+```bash
+python -m pytest tests/ -q
+```
+
+Pure-logic unit tests for Path B's runtime (no weights, GPU or data). They don't cover the
+whole pipeline.
 
 ---
 
-## 📊 Evaluation Metrics
+## Configuration
 
-The pipeline uses the **GS-HOTA** metric, which combines:
-- **DetA (Detection Accuracy)**: Measures how well players are localized and correctly identified (Role, Team, Jersey).
-- **AssA (Association Accuracy)**: Measures tracking consistency across frames.
-- **LocSim**: Gaussian similarity (tau=5m) for pitch localization.
-- **IdSim**: Binary matching for Role, Team, and Jersey Number.
-
----
-
-## ⚙️ Configuration
-
-Module parameters (thresholds, model paths, clustering) are managed in:
-`gsr_pipeline/configs/default.yaml`
-
-Key settings:
-- `detector.conf_threshold`: Default is `0.25`.
-- `team.n_clusters`: Set to `3` (separates Team A, Team B, and Referees).
-- `reid.model_name`: Default is `osnet_x0_25`.
+All runtime settings live in `gsr_pipeline/configs/default.yaml`, one section per stage
+(`detector`, `detector_b`, `reid`, `tracker`, `calibration`, `jersey`, `team`, `refiner`,
+`output`, `possession`, `pitch_view_gate`, `team_live`, `athlete_roles`, `reid_worker_pool`,
+`live_broadcast`, `frame_source`, `ws`, `streaming`).
+The inline comments explain each tunable and where its value came from.
 
 ---
 
-## 📂 Project Structure
+## Documentation
+
+| folder | doc | authoritative for |
+|---|---|---|
+| `docs/architecture/` | `GSR_PIPELINE.md` | how the pipeline works, the metric, results |
+| | `PIPELINE_EVOLUTION.md` | event taxonomy, revision semantics, Kafka mapping, open design issues |
+| | `STREAMING_ARCHITECTURE.md` | the live path and the API; build status in §8 |
+| | `REQUIREMENTS.md` | requirements, with evidence levels |
+| `docs/path_b/plans/` | `IMPLEMENTATION_PLAN.md` | the Path B pipeline; per-phase status in §12.1 |
+| | `OPTIMIZATION_PLAN.md` | Path B latency work; build status in §7 |
+| | `BALL_TEMPORAL_PLAN.md` | the ball specialist; work order in §9 |
+| `docs/path_b/` | `DETECTOR_AND_DATA_BLOCKERS.md` | why Path B; ball-detection options; the role/team classifier |
+| | `PERF_LOG.md` | dated performance and accuracy measurements |
+| `docs/guides/` | `PATH_B_EVAL_GUIDE.md` | scoring the Path B pipeline end to end with GS-HOTA, jersey counted (local GPU) |
+| | `BALL_TEMPORAL_GUIDE.md`, `BALL_TEMPORAL_KAGGLE_GUIDE.md` | the ball specialist work, local GPU and Kaggle |
+| `docs/results/` | `PATH_B_EVAL_T4_2026-10-05.md` | Path B end to end on a Kaggle T4 |
+
+Conventions: each plan has a status line and a build-status section, kept current as work lands.
+Measurements go into `PERF_LOG.md` as dated entries. Where a doc and the code disagree, the code
+wins and the doc gets fixed.
+
+---
+
+## Layout
 
 ```text
-├── gsr_pipeline/          # Core pipeline source code
-│   ├── configs/           # YAML configuration files
-│   ├── detect.py          # YOLOv8 Athlete Detection
-│   ├── track.py           # Multi-Object Tracking
-│   ├── team.py            # KMeans Team/Referee Classification
-│   ├── jersey.py          # EasyOCR Jersey Recognition
-│   ├── evaluate.py        # GS-HOTA Metric Implementation
-│   └── run.py             # Main execution script
-├── data/                  # Dataset directory (SoccerNetGS)
-├── outputs/               # Prediction and visualization results
-└── requirements.txt
+gsr_pipeline/          the pipeline: stages, live path, Path B runtime (runtime/), evaluators
+  configs/default.yaml   all runtime settings
+  nbjw_calib/            vendored calibration package (own setup.py)
+api/                   FastAPI HTTP + WS service
+scripts/               export, TensorRT, parity, training and inference tools
+  ball_temporal/         ball specialist scripts (current)
+notebooks/path_b_eval.py   Path B end-to-end evaluation runner
+tests/                 pytest, pure logic
+docs/                  see Documentation
+runs/yolo26s_athlete_ball/   Path B detector: best.pt, ONNX exports and sidecars (tracked)
+data/                  gitignored: datasets/SoccerNetGS/, outputs/, pretrained_models/
+yolov8n_gsr.pt         Path A detector (the default config's detector.model_path)
 ```
 
-## 📝 License
-This project follows the licensing of the original SoccerNet-GSR baseline and associated models (YOLOv8, TorchReID).
+## License
+
+Follows the licensing of the SoccerNet GSR baseline and the models it uses (YOLO, TorchReID).

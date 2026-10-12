@@ -29,7 +29,7 @@ def main():
     setup_logging()
     parser = argparse.ArgumentParser(description="SoccerNet Game State Reconstruction Pipeline")
     parser.add_argument("--sequence_dir", type=str, required=True, help="Path to sequence directory")
-    parser.add_argument("--output_dir", type=str, default="outputs/gsr_run", help="Output directory")
+    parser.add_argument("--output_dir", type=str, default="data/outputs/gsr_run", help="Output directory")
     parser.add_argument("--config", type=str, default="gsr_pipeline/configs/default.yaml", help="Path to config yaml")
     parser.add_argument("--max_frames", type=int, default=None, help="Limit frames to process")
     parser.add_argument("--save_video", action="store_true", help="Generate annotated video")

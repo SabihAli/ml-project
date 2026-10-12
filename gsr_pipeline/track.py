@@ -60,7 +60,11 @@ class ByteTracker:
                 match_thresh=match_thresh,
                 fuse_score=True,
             )
-            self._tracker = BYTETracker(args, frame_rate=frame_rate)
+            try:
+                self._tracker = BYTETracker(args, frame_rate=frame_rate)
+            except TypeError:
+                # Newer ultralytics (>=8.3) dropped the frame_rate kwarg.
+                self._tracker = BYTETracker(args)
         except ImportError:
             # Fallback: try the older ultralytics internal path
             try:
@@ -75,7 +79,10 @@ class ByteTracker:
                     match_thresh=match_thresh,
                     fuse_score=True,
                 )
-                self._tracker = BYTETracker(args, frame_rate=frame_rate)
+                try:
+                    self._tracker = BYTETracker(args, frame_rate=frame_rate)
+                except TypeError:
+                    self._tracker = BYTETracker(args)
             except ImportError as e:
                 raise ImportError(
                     "Could not import BYTETracker from ultralytics. "
@@ -104,9 +111,6 @@ class ByteTracker:
         """
         detections_df = detections_df.copy()
         detections_df["track_id"] = np.nan
-
-        if detections_df.empty:
-            return detections_df
 
         # Prepare detections for the tracker
         # Ultralytics BYTETracker expects an object with .conf, .xyxy, and .cls attributes
@@ -142,16 +146,23 @@ class ByteTracker:
             def __len__(self):
                 return len(self.conf)
 
-        tracker_input = TrackerInput(
-            detections_df["conf"].values,
-            np.vstack(detections_df["bbox_ltrb"].values),
-            detections_df["cls_id"].values
-        )
-        
+        if detections_df.empty:
+            # Still step the tracker: an empty frame must age lost tracks toward
+            # track_buffer, or a gap with no detections freezes them and changes which
+            # tracks re-associate afterwards.
+            tracker_input = TrackerInput(np.empty(0, np.float32), np.empty((0, 4), np.float32),
+                                         np.empty(0, np.float32))
+        else:
+            tracker_input = TrackerInput(
+                detections_df["conf"].values,
+                np.vstack(detections_df["bbox_ltrb"].values),
+                detections_df["cls_id"].values
+            )
+
         # ByteTracker.update(results, img=None)
         tracks = self._tracker.update(tracker_input)
 
-        if tracks is None or len(tracks) == 0:
+        if detections_df.empty or tracks is None or len(tracks) == 0:
             return detections_df
 
         # Match tracks back to original detections by IoU

@@ -1,7 +1,7 @@
 """
 export_athlete_detector.py -- export the 2-class athlete/ball detector to ONNX.
 
-Release-time step (docs/path_b_implementation/IMPLEMENTATION_PLAN.md section 3.2): run once
+Release-time step (docs/path_b/plans/IMPLEMENTATION_PLAN.md section 3.2): run once
 per model version on a dev machine, commit/ship the resulting .onnx + .onnx.json, and let
 each production host build its own TensorRT engine from the ONNX via build_trt_engine.py.
 TRT engines are specific to GPU model, driver and TRT version, so they cannot be shipped.
@@ -21,7 +21,7 @@ names are not exactly {athlete, ball}.
 Usage:
     python -m scripts.export_athlete_detector                       # 1280x736, rectangular
     python -m scripts.export_athlete_detector --imgsz 1280 1280     # square, for the A/B
-    python -m scripts.export_athlete_detector --weights path/to/best.pt --out_dir model_testing/...
+    python -m scripts.export_athlete_detector --weights path/to/best.pt --out_dir runs/yolo26s_athlete_ball
 """
 
 from __future__ import annotations
@@ -34,13 +34,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_WEIGHTS = REPO_ROOT / "model_testing" / "yolo26s_athlete_ball" / "best.pt"
+DEFAULT_WEIGHTS = REPO_ROOT / "runs" / "yolo26s_athlete_ball" / "best.pt"
 
 # Fixed by the checkpoint; the exporter refuses to run against anything else so that a
 # silently-swapped model cannot produce a plausible-looking artifact.
 EXPECTED_NAMES = {0: "athlete", 1: "ball"}
 
-# From model_testing/yolo26s_athlete_ball/args.yaml. These are the values the parity gate
+# From runs/yolo26s_athlete_ball/args.yaml. These are the values the parity gate
 # (plan section 3.5) must reproduce -- NOT detect.py's iou_threshold=0.45, which belongs to
 # the old Path A detector.
 TRAIN_IOU = 0.7

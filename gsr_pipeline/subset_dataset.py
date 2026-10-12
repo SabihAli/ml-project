@@ -41,7 +41,7 @@ def subset_gsr_dataset(src_root, dst_root, ratio=0.65):
             shutil.copy2(str(info_file), str(dst_split / "sequences_info.json"))
 
 if __name__ == "__main__":
-    src = "data/SoccerNetGS/gamestate-2024"
+    src = "data/datasets/SoccerNetGS/gamestate-2024"
     dst = "data/GSR_Subset_65"
     
     # We use copy instead of move to avoid destroying the local dataset

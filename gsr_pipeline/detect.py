@@ -1,13 +1,16 @@
 """
-detect.py — YOLOv8n person/ball detector.
+detect.py — YOLOv8n athlete/ball detector.
 
-Uses the Ultralytics YOLOv8 implementation.  The nano model (yolov8n.pt, ~6 MB)
-is downloaded automatically by ultralytics on first run.
+Uses the Ultralytics YOLOv8 implementation with a fine-tuned checkpoint
+(yolov8n_gsr.pt) trained on 4 custom GSR classes -- NOT the stock COCO
+classes. The model directly distinguishes player / goalkeeper / referee /
+ball, so no downstream module needs to re-derive role from appearance.
 
 Output columns added to the per-frame DataFrame:
     bbox_ltwh       (l, t, w, h) in pixel coordinates
     bbox_conf       detection confidence
-    class_id        0 = person, 32 = sports ball (COCO class ids)
+    class_id        0 = player, 1 = goalkeeper, 2 = referee, 3 = ball
+                    (see _PLAYER_CLASS / _GK_CLASS / _REFEREE_CLASS / _BALL_CLASS below)
 """
 
 from __future__ import annotations
@@ -29,7 +32,8 @@ _BALL_CLASS = 3
 
 
 class YOLOv8nDetector:
-    """Thin wrapper around Ultralytics YOLOv8n for person + ball detection."""
+    """Thin wrapper around Ultralytics YOLOv8n, fine-tuned on GSR classes
+    (player / goalkeeper / referee / ball)."""
 
     def __init__(
         self,
@@ -43,15 +47,16 @@ class YOLOv8nDetector:
     ) -> None:
         """
         Args:
-            model_path:      Path to a .pt weights file or an ultralytics model
-                             name (e.g. 'yolov8n.pt').  Will auto-download.
-            conf_threshold:  Minimum detection confidence for people.
+            model_path:      Path to a .pt weights file, e.g. the fine-tuned
+                             'yolov8n_gsr.pt' (default config value).
+            conf_threshold:  Minimum detection confidence for player/goalkeeper/referee.
             ball_conf_threshold: Minimum detection confidence for the ball.
             iou_threshold:   NMS IoU threshold.
             device:          Torch device string ('cpu', 'cuda', 'cuda:0', …).
             batch_size:      Number of frames to process per forward pass.
-            classes:         COCO class IDs to keep.  Defaults to [0, 32]
-                             (person + sports ball).
+            classes:         GSR class IDs to keep.  Defaults to
+                             [_PLAYER_CLASS, _GK_CLASS, _REFEREE_CLASS, _BALL_CLASS]
+                             i.e. [0, 1, 2, 3].
         """
         from ultralytics import YOLO  # lazy import
 

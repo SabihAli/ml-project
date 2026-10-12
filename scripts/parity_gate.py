@@ -119,8 +119,8 @@ def main() -> None:
     parser.add_argument("--backend", default="ort_cpu",
                         choices=["tensorrt", "ort_gpu", "ort_cpu"])
     parser.add_argument("--device", default="cpu")
-    parser.add_argument("--weights", default="model_testing/yolo26s_athlete_ball/best.pt")
-    parser.add_argument("--output_json", default="outputs/phase1/parity.json")
+    parser.add_argument("--weights", default="runs/yolo26s_athlete_ball/best.pt")
+    parser.add_argument("--output_json", default="data/outputs/phase1/parity.json")
     parser.add_argument("--sequences", nargs="*", default=None)
     args = parser.parse_args()
 
@@ -133,8 +133,8 @@ def main() -> None:
         raise SystemExit(f"need >= 3 sequences for the gate; found {len(sequences)}")
 
     variants = [
-        ("rectangular 736x1280", "model_testing/yolo26s_athlete_ball/best_736x1280.onnx", (736, 1280)),
-        ("square 1280x1280", "model_testing/yolo26s_athlete_ball/best_1280x1280.onnx", (1280, 1280)),
+        ("rectangular 736x1280", "runs/yolo26s_athlete_ball/best_736x1280.onnx", (736, 1280)),
+        ("square 1280x1280", "runs/yolo26s_athlete_ball/best_1280x1280.onnx", (1280, 1280)),
     ]
 
     report = {

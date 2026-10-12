@@ -1,8 +1,3 @@
-# Documentation
-BASELINE.md
-WINNER_PAPER.md
-README_pipeline.md
-
 # Python
 __pycache__/
 *.py[cod]
@@ -26,19 +21,24 @@ wheels/
 .installed.cfg
 *.egg
 .gsr_venv/
+.ball_venv/
 
 # Notebooks
 .ipynb_checkpoints
 
-# ML/Data
-data/*
-!data/SoccerNetGS/
-data/SoccerNetGS/*
-!data/SoccerNetGS/gamestate-2024/
-data/SoccerNetGS/gamestate-2024/*
-!data/SoccerNetGS/gamestate-2024/valid_sample/
+# ML/Data: datasets, outputs and calibration checkpoints live under data/ and are never tracked
+data/
 outputs/
 pretrained_models/
+
+# Training runs: only the Path B detector is tracked (weights, ONNX files, sidecars, training args)
+runs/*
+!runs/yolo26s_athlete_ball/
+runs/yolo26s_athlete_ball/*
+!runs/yolo26s_athlete_ball/best.pt
+!runs/yolo26s_athlete_ball/*.onnx
+!runs/yolo26s_athlete_ball/*.onnx.json
+!runs/yolo26s_athlete_ball/args.yaml
 *.weights
 
 # IDEs
