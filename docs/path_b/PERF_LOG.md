@@ -10,7 +10,134 @@ changed. Numbers from a machine that is not the production host are tagged as su
 |---|---|---|
 | `dev-cpu` | 13th Gen Intel Core i5-1335U, Intel Iris Xe (no NVIDIA GPU) | torch 2.13.0+**cpu**, `torch.version.cuda = None`. Cannot run tiers 1–2, NVDEC, CUDA events or NVML. Useful only for correctness and for A/B against other `dev-cpu` runs. |
 | `kaggle-t4` | Kaggle notebook, Tesla T4, 2 vCPU | torch 2.11.0+cu128, ORT 1.22.0, TensorRT 10.16.1.11. Real CUDA, but not the production card, and stages run back to back on one thread. Doesn't count against §1.4. |
+| `rtx-3090` | Local desktop, NVIDIA RTX 3090 24 GB, driver 610.88, Windows 11 | torch 2.6.0+cu124, Ultralytics 8.4.176, Python 3.11. A 30-series card, so it can be compared with the `prod-gpu` targets, but it isn't the provisioned production host. |
 | `prod-gpu` | RTX 30-series, not yet provisioned | Every §1.4 target is written against this. See plan §16 item 2. |
+
+---
+
+## 2026-10-15: ball temporal plan step 4, test gates 1-3
+
+Tag: `rtx-3090`. Script: `scripts/eval/ball_det/eval_ball_temporal.py`. 15 test sequences, 15 px
+centre match, main detector from the step 1 cache (imgsz 1280, conf >= 0.15; the plan's gate 1
+names the 416 runtime scale, so this baseline is the stronger one). System simulated frame by
+frame: specialist runs only when main misses, on a window centred on the last sighting, for up
+to 15 frames. `fused` = the runtime (a specialist hit re-centres the window); `main` = only main
+sightings place it. System threshold rule: highest `select` recall with precision >= main's on
+`select`; frozen for test. Reports: `data/outputs/ball_temporal/eval/<run>/report.md`.
+
+**Gates 1-2 (test crops, threshold at 5% `select` negative FPR):**
+
+| crops | main | `c5b` | `c9b` |
+|---|---|---|---|
+| all positives (5,551) | 36.4% | **72.6%** | 68.1% |
+| hard (3,533) | 0% | **58.5%** | 52.1% |
+| easy (2,018) | 100% | 97.3% | 96.2% |
+| negatives fire (1,463) | 3.1% | 5.4% | 5.8% |
+
+Gate 1: PASS for both.
+
+**Gate 3 (system, every test frame; main alone: recall 59.36%, precision 85.29%, longest miss
+2.9 s mean / 9.9 s max):**
+
+| run | chain | `select` threshold | recall | precision | gate 3 |
+|---|---|---|---|---|---|
+| `c5b` | fused | 0.75 | 68.56% (+9.2) | 86.52% (+1.2) | FAIL (by 0.8 points) |
+| `c9b` | fused | 0.55 | 70.24% (+10.9) | 86.41% (+1.1) | **PASS** |
+| `c5b` | main | 0.70 | 68.49% (+9.1) | 86.37% (+1.1) | FAIL |
+
+- **Diagnostic test sweep (not used to choose):** `c5b` fused beats `c9b` at every threshold, and
+  keeps precision above main's 85.29% from 0.20 to 0.80 (e.g. 0.40: recall 73.99%, +14.6;
+  precision 86.16%). `c5b`'s failure is the threshold rule: main's precision is 88.3% on
+  `select` but 85.3% on `test`, so ">= main on select" picks a conservative threshold.
+- Specialist outputs are 93-95% on the labelled ball, above main's own precision, so adding them
+  raises system precision.
+- Fused chain: recall by gap since the last sighting falls from 60-69% at 1 frame to under 20%
+  at 2+ (frames at gap 2+ are ones the specialist already missed). Main chain holds 26-48% across
+  gaps 1-15 but ends at the same total.
+- Longest miss max stays 9.9 s: long gaps exceed the 15-frame window, the tracker's job (§7).
+- PyTorch FP16, batch 1: about 8 ms per specialist call on the 3090 (not gate 4; TensorRT is step 5).
+- Compare v1 (2026-10-12): best system setting +4.7 recall for −6.2 precision.
+
+---
+
+## 2026-10-15: ball temporal plan step 3, first heatmap specialist runs
+
+Tag: `rtx-3090`. Scripts: `scripts/ball_temporal/heatmap_model.py`, `train_ball_temporal.py`.
+Trained on `train` + `pool` (32,364 crops, `outside` excluded; hard `pool` positives ×3, 47,490
+samples per epoch), batch 32, AdamW 5e-4, AMP, patience 8. Scored on `select` (5,016 crops).
+Score = distance recall (15 px) averaged over the thresholds at which 1–10% of negative crops
+fire. These are `select` numbers, not the test gates (step 4).
+
+| run | input | best epoch / stopped | score (hard / easy) | recall at 5% neg FPR (hard / easy) | s/step | min/epoch |
+|---|---|---|---|---|---|---|
+| `c9b` | 9 ch (3 RGB) | 18 / 26 | **71.1%** (55.0% / 92.8%) | 72.6% (56.7% / 94.0%) | 0.56 | 14.3 |
+| `c5b` | 5 ch (RGB + 2 diffs) | 23 / 30 (resumed at 11 with patience 16) | **71.3%** (54.8% / 93.4%) | 73.1% (56.7% / 95.2%) | 0.36 | 9.3 |
+
+- Both plateau at about 70% (`c9b` from epoch 13, `c5b` from epoch 11); select loss rose while
+  recall held (overconfidence, not lost recall). 5 and 9 channels are tied on `select`; 5 channels
+  is about 1.6× cheaper per step, so it is the default candidate for step 4 unless the test gates
+  separate them.
+- `outside fire` stayed at 25–43%: windows centred on a main-detector sighting often contain a
+  real ball the specialist finds, whether or not it is the labelled one.
+- Earlier runs `c9`/`c5` (2026-10-13/14) are superseded: their selection metric was unstable and
+  `outside` crops taught them to suppress real balls (see the step 2 correction above).
+
+---
+
+## 2026-10-13: ball temporal plan step 2, temporal crop dataset
+
+Tag: `rtx-3090` machine, CPU only (8 workers). Script: `scripts/ball_temporal/build_ball_temporal_dataset.py`,
+from the step 1 cache. 46,170 samples, 16 GB (one 640×1920 JPEG per sample: crops t−2 | t−1 | t,
+quality 95), 6.4 min. Spot-checked by eye on preview sheets from a 2-sequence smoke run (SNGS-024,
+SNGS-060): labels sit on the ball, hard positives are blur, balls in the air and balls in a
+goalkeeper's hands, and negatives contain no ball.
+
+| split | samples | hard | easy | outside | neg_hard | neg_random | hard frames sampled (any kind) | sum of repeat | GT-centred |
+|---|---|---|---|---|---|---|---|---|---|
+| train | 16669 | 0 | 13306 | 83 | 2438 | 842 | 61 | 16669 | 256 |
+| pool | 16972 | 7563 | 4783 | 1194 | 2541 | 891 | 8692 | 32098 | 1806 |
+| select | 5016 | 2006 | 1494 | 507 | 749 | 260 | 2486 | 5016 | 453 |
+| test | 7513 | 3533 | 2018 | 499 | 1095 | 368 | 3994 | 7513 | 675 |
+
+- **Hard-example set:** 7,563 hard positives from `pool` (×3 in training via `repeat`), out of
+  8,719 hard frames. The rest are frames with no sighting in the last 15 frames (no crop), a
+  ball cut ambiguously by the window (dropped), or the ball **outside** the runtime window.
+- **`outside`:** about 13% of hard frames in `pool`, `select` and `test` put the labelled ball
+  outside a window centred like the runtime. **Correction (2026-10-14):** many of these windows
+  are centred on a *real* but unlabelled ball (a spare ball by the advertising boards; SNGS-038
+  frames 124–150 are a long run of them), because the main detector's last sighting was that
+  ball. Labelled empty, they taught the first training runs to suppress real balls and made the
+  selection score count correct detections as false positives. Training now excludes them and
+  scores false positives on `neg_hard`/`neg_random` only. They are a fusion/tracker problem
+  (which ball is the match ball), not a specialist one.
+
+---
+
+## 2026-10-13: ball temporal plan step 1, main-detector cache
+
+Tag: `rtx-3090`. Ultralytics 8.4.176, PyTorch 2.6.0+cu124. Guide: `docs/guides/BALL_TEMPORAL_GUIDE.md`.
+Detector `runs/yolo26s_athlete_ball/best.pt`, imgsz 1280, FP16, batch 32, 4 decode threads. Source:
+the extracted GSR `train` and `valid` splits in `data/datasets/SoccerNetGS/` (the guide's
+`data/gsr/` was not used; the guide still says `--src data/gsr`).
+
+- **Smoke test:** SNGS-021, 32 frames: output shape correct, no ball detected (kickoff frames,
+  which every model misses). 111 ms/frame, mostly warm-up. A second check on SNGS-024, 480
+  frames, gave **26 ms/frame**; 435 of 480 frames had a detection and the top one was within
+  15 px of GT in 392.
+- **Full run:** 115 sequences, 86,250 frames, about **30 min** wall time (first to last cache
+  file timestamp).
+- **Sanity checks:** split counts 57/33/10/15 as expected. `test` recall 59.36% against the
+  ~59% measured on Kaggle 2026-10-12. `train` recall is clearly above the other splits, so
+  hard examples come from `pool` only (plan decision A holds).
+
+| split | sequences | frames | frames with GT ball | main recall (top ball) | hard frames | hard share |
+|---|---|---|---|---|---|---|
+| train | 57 | 42750 | 40234 | 84.32% | 6238 | 15.50% |
+| pool | 33 | 24750 | 23187 | 61.63% | 8719 | 37.60% |
+| select | 10 | 7500 | 7074 | 63.95% | 2492 | 35.23% |
+| test | 15 | 11250 | 10178 | 59.36% | 4013 | 39.43% |
+
+The hard-example set before oversampling is the `pool` count: **8,719 frames**.
 
 ---
 

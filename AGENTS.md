@@ -57,6 +57,7 @@ cv_service/
 │   │   ├── GSR_PIPELINE.md           # How the pipeline works, the metric, results (was IMPLEMENTATION.md)
 │   │   ├── PIPELINE_EVOLUTION.md     # Event taxonomy, revision semantics, open issues
 │   │   ├── STREAMING_ARCHITECTURE.md # Live path (Path A) design + build status (§8)
+│   │   ├── BALL_TEMPORAL_ARCH.md     # Temporal ball specialist (c5b): model, training, results
 │   │   └── REQUIREMENTS.md
 │   ├── path_b/                # Path B (2-class detector) work
 │   │   ├── plans/IMPLEMENTATION_PLAN.md  # Path B plan, per-phase status in §12.1
@@ -68,7 +69,8 @@ cv_service/
 │   └── results/               # Evaluation reports (PATH_B_EVAL_T4_2026-10-05.md)
 ├── notebooks/path_b_eval.py   # Kaggle runner: Path B parity, detection, roles, GS-HOTA, latency
 ├── scripts/                   # Path B export/engine/parity tools, YOLO26 training + inference
-│   └── ball_temporal/         # Ball specialist v2 scripts (docs/path_b/plans/BALL_TEMPORAL_PLAN.md); v1 ball scripts sit in scripts/ as a record
+│   ├── ball_temporal/         # Ball specialist v2 scripts: main-detector cache, 3-frame dataset, heatmap model, training (docs/path_b/plans/BALL_TEMPORAL_PLAN.md); v1 ball scripts sit in scripts/ as a record
+│   └── eval/ball_det/         # Ball specialist evaluation: test gates 1-3 (eval_ball_temporal.py)
 ├── tests/                     # pytest, pure logic only (see Testing)
 ├── runs/yolo26s_athlete_ball/ # Path B detector: best.pt + exported ONNX and sidecars (tracked); everything else under runs/ is gitignored
 ├── yolov8n_gsr.pt             # Committed fine-tuned detector weights
@@ -363,7 +365,7 @@ When a change alters any of the following, update the corresponding documentatio
 - **`data/datasets/SoccerNetGS/gamestate-2024/valid/SNGS-021`**: the "Run Inference" example command in README/AGENTS.md references this path, but no dataset is tracked in this repo (see `.gitignore`) — the `valid/` split must be downloaded first (`docs/guides/BALL_TEMPORAL_GUIDE.md` §3) before that exact example command will work.
 - **Batch-only architecture vs. the service's real-time goal**: tracklet aggregation, batch team classification, and refinement still require the full sequence. The live path sidesteps them rather than making them incremental: `process_stream` skips them, and `LiveTeamAssigner` replaces batch team classification. Live `POSSESSION`/`TURNOVER` remain unbuilt because `possession.py` still runs only over a completed sequence.
 - **Relationship to the rest of the BallKnowledge monorepo**: resolved and built. cv-service is consumed over its HTTP + WS API by `CVPipelineSource`, which lives in `data_ingestion` (a separate git repository from this one, `github.com/SabihAli/ml-project`) and publishes through `data_ingestion`'s Kafka layer. A change to this repo's WS message shape (`api/event_serializer.py`) or detector classes must be matched in that file.
-- **Ball detection is the weakest input to every ball-based event**: on `SNGS-021`, `evaluate_detection.py` measures 52.4% ball recall with gaps up to 6.7s (players 95.4%, referees 84.6%). See `docs/architecture/PIPELINE_EVOLUTION.md` §6 and §7.1 before building live possession or any classifier-tier event.
+- **Ball detection is the weakest input to every ball-based event**: on `SNGS-021`, `evaluate_detection.py` measures 52.4% ball recall with gaps up to 6.7s (players 95.4%, referees 84.6%). See `docs/architecture/PIPELINE_EVOLUTION.md` §6 and §7.1 before building live possession or any classifier-tier event. On the 15 held-out test sequences the Path B detector finds 59.4% of balls; the temporal specialist `c5b` (`docs/architecture/BALL_TEMPORAL_ARCH.md`) raises that to 68.6% with precision up 1.2 points in simulation, but is not yet exported or wired into the pipeline.
 
 ### Resolved since initial documentation
 

@@ -1,11 +1,11 @@
 # Ball detection beyond the main detector: plan
 
-Status (2026-10-12): **rewritten.** The first approach, a single-frame YOLO26s detector on
-640×640 crops (v1), was trained, evaluated on Kaggle, and scratched (§1). It is not used
-anywhere going forward. This plan replaces it with a new specialist that sees **several
-frames** (§4), predicts a **point** rather than a box (§5), and is trained on **hard
-examples** (§6). A **ball tracker** comes after, once the new specialist is measured (§7).
-Nothing in §4–§7 is built yet.
+Status (2026-10-15): **steps 1–4 of §9 done; the specialist is chosen (`c5b`).** v1, a
+single-frame YOLO26s on 640×640 crops, was scratched (§1). Its replacement sees **three frames**
+(§4), predicts a **point** (§5) and trains on **hard examples** (§6). On the 15 test sequences it
+passes gate 1 and adds +9.2 recall points with +1.2 precision at the system level (gate 3 needs
++10; §8, §10 items 11–14). Next: a `select`-only threshold rule, then export (step 5). The ball
+tracker (§7) is not built. Model write-up: `docs/architecture/BALL_TEMPORAL_ARCH.md`.
 
 How to run it: `docs/guides/BALL_TEMPORAL_GUIDE.md` (local GPU, RTX 3090) or
 `docs/guides/BALL_TEMPORAL_KAGGLE_GUIDE.md` (Kaggle 2×T4). The v1 scripts are still in
@@ -171,7 +171,9 @@ and what every gate measures, and it removes the box-label noise.
 - **Augmentation:** horizontal flip, the same colour jitter across all frames, small
   translation. Scale stays close to 1:1, because the runtime feeds crops 1:1.
 - **Training:** both T4s with DDP, AMP, early stopping on validation distance-recall (not loss),
-  and a patience short enough for the overfitting v1 showed (epoch 17 of 42).
+  and a patience short enough for the overfitting v1 showed (epoch 17 of 42). *As run
+  (2026-10-15):* one local RTX 3090, no DDP, AMP, patience 8; the selection score is recall
+  averaged over the thresholds at which 1–10% of `select` negatives fire (§10 item 12).
 - **Export:** ONNX, with input (N, C, 640, 640) and outputs heatmap + offset. A parity gate
   against PyTorch, and TensorRT FP16 timing. The runtime contract changes from boxes to points:
   `BallSpecialist` returns (x, y, conf) (implementation plan §5.3–5.4).
@@ -218,8 +220,10 @@ window placed where the runtime would put it.
    - the main detector's confidence at t, window `x0`/`y0`, ball size and offset from the window
      centre.
 
-**Builder:** a new `build_ball_temporal_dataset.py`, reusing the readers and window code from
-`build_ball_crop_dataset.py` and the main-detector cache from `evaluate_ball_specialist.py`.
+**Builder:** `scripts/ball_temporal/build_ball_temporal_dataset.py` (built 2026-10-13), standalone
+with `gsr_io.py`; it reads the step 1 cache. It also writes a sixth kind, `outside`: the runtime
+window misses the labelled ball. Many of these windows show a real, unlabelled ball, so training
+and the negative false-positive rate leave them out (§10 item 11).
 
 ---
 
@@ -271,11 +275,12 @@ Gate 3 also reports specialist recall per gap since the last sighting, which set
 
 | # | step | where | done when |
 |---|---|---|---|
-| 1 | main-detector cache, `scripts/ball_temporal/cache_main_detections.py` (**built**; guides: `docs/guides/BALL_TEMPORAL_GUIDE.md`, `BALL_TEMPORAL_KAGGLE_GUIDE.md`) | local RTX 3090 or Kaggle 2×T4 | all 115 sequences cached; summary table recorded |
-| 2 | `build_ball_temporal_dataset.py` | local smoke test, then Kaggle | spot-check by eye; hard-frame count recorded |
-| 3 | heatmap model + training script | local smoke test, then Kaggle DDP | first run trained, curves saved |
-| 4 | evaluator support for point models in `crops` and `fuse`; 5-ch vs 9-ch | Kaggle | gates 1–3 in a dated `PERF_LOG.md` entry |
-| 5 | export, parity, runtime contract change to points | Kaggle | gate 4 passes |
+| 1 | main-detector cache, `scripts/ball_temporal/cache_main_detections.py` (**built**; guides: `docs/guides/BALL_TEMPORAL_GUIDE.md`, `BALL_TEMPORAL_KAGGLE_GUIDE.md`) | local RTX 3090 or Kaggle 2×T4 | all 115 sequences cached; summary table recorded. **Done 2026-10-13**, local RTX 3090; see the 2026-10-13 entry in `docs/path_b/PERF_LOG.md` |
+| 2 | `build_ball_temporal_dataset.py` | local smoke test, then Kaggle | spot-check by eye; hard-frame count recorded. **Done 2026-10-13** (`scripts/ball_temporal/build_ball_temporal_dataset.py`, local); see the 2026-10-13 step 2 entry in `docs/path_b/PERF_LOG.md` |
+| 3 | heatmap model + training script | local smoke test, then Kaggle DDP | first run trained, curves saved. **Done 2026-10-15** (local, single RTX 3090): `runs/ball_temporal/c9b`, `c5b`; see the 2026-10-15 entry in `docs/path_b/PERF_LOG.md` |
+| 4 | evaluator support for point models in `crops` and `fuse`; 5-ch vs 9-ch | Kaggle | gates 1–3 in a dated `PERF_LOG.md` entry. **Measured 2026-10-15** (local, `scripts/eval/ball_det/eval_ball_temporal.py`): gate 1 pass; gate 3 pass for `c9b`, `c5b` short by 0.8 points under the `select` threshold rule; see `PERF_LOG.md` |
+| 4b | `select`-only system threshold rule, re-run gate 3 for `c5b` (a second look, §10 item 14) | local | gate 3 re-reported |
+| 5 | export, parity, runtime contract change to points | Kaggle or local 3090 | gate 4 passes |
 | 6 | `BallTracker` + pytest; `track` evaluator stage | local | gate 5 measured |
 
 **Deferred** (user, 2026-10-12; revisit after step 4): copy-paste of balls, motion-blur
@@ -301,4 +306,16 @@ training).
    detector never trained on (`pool`). 10 non-test `valid` sequences (`select`) are held back
    for model selection (§3).
 10. **This phase's scripts live in `scripts/ball_temporal/`** (user, 2026-10-12), standalone,
-    so the v1 scripts aren't needed.
+    so the v1 scripts aren't needed. Evaluators live in `scripts/eval/ball_det/` (user, 2026-10-15).
+11. **`outside` crops out of training** (measured, 2026-10-14). Windows centred on a main-detector
+    sighting often hold a real but unlabelled ball (a spare ball by the boards); labelled empty,
+    they taught the first runs (`c9`, `c5`) to ignore real balls. Those runs are superseded.
+12. **Selection score** (2026-10-14): recall averaged over 1–10% negative false-positive rates.
+    Recall at a single threshold swung 16–41% between epochs on noise.
+13. **`c5b` chosen** (user, 2026-10-15): 5 channels (RGB at t + two difference images) beat
+    9 channels on hard test crops (58.5% vs 52.1%) and at every system threshold, and is about
+    1.6× cheaper per training step.
+14. **Gate 3 threshold rule to be replaced** (2026-10-15). "Precision ≥ main's on `select`"
+    picked 0.75 for `c5b` because main's precision is 88.3% on `select` but 85.3% on `test`.
+    The new rule is set on `select` only; because test results prompted the change, its re-run
+    is reported as a second look.

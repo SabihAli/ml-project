@@ -2,7 +2,8 @@
 
 Notebook steps for `docs/path_b/plans/BALL_TEMPORAL_PLAN.md`. For a local GPU, use
 `docs/guides/BALL_TEMPORAL_GUIDE.md` instead. This guide covers **step 1, the
-main-detector cache** (plan §6, §9). Later steps get their own sections as they're built.
+main-detector cache** (plan §6, §9). Steps 2–4 were run on the local RTX 3090 and are only in the
+local guide (§5b–§5d); their scripts are standalone too, if they need porting here.
 
 Paste the cells top to bottom. Every path is written out; there are no variables to set.
 

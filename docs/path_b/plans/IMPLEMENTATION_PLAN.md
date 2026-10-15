@@ -771,7 +771,7 @@ instead, and the perf baseline is picked up when Phase 0 lands on a CUDA host.
 | 3 | **Partial** | Camera motion is built (`camera_motion.py`). ByteTrack steps on empty frames. Missing: detection-index association, array input, BoT-SORT A/B, AssA/IDF1 table. |
 | 4 | **Mostly built** | See §7 build status. Missing: FP16 projection gate, multi-sequence K choice, dropping implausible projections, `h_source` on the WS wire. |
 | 5 | **Not started** | `athlete_roles.py` exists as a one-shot batch classifier only; no live vote/lock, GPU descriptors or half-time flip. Role and team accuracy on GT: 95.5% and 98.2% (T4 run, 3 sequences). |
-| 6 | **Not started** | No crop planner, `BallSpecialist`, stub, or `BallTracker`. The eval runner uses the top-confidence ball under one constant track ID. |
+| 6 | **Not started** (runtime) | No crop planner, `BallSpecialist`, stub, or `BallTracker`. The eval runner uses the top-confidence ball under one constant track ID. The specialist model itself is trained and gate-tested (`c5b`, 2026-10-15; `BALL_TEMPORAL_PLAN.md` §9, `docs/architecture/BALL_TEMPORAL_ARCH.md`); it outputs a point, not a box, so §5.3's interface changes when it lands. |
 | 7 | **Not started** | Latency work moved to `docs/path_b/plans/OPTIMIZATION_PLAN.md` (its Phases 0–1 built 2026-10-07). |
 | 8 | **Not started** | |
 | 9 | **Partial, as an eval** | `notebooks/path_b_eval.py` runs Path B batch end to end to GS-HOTA (T4, 3×100 frames: persons 58.95%, with_ball 57.75%, jersey ignored). Not in `gsr_pipeline/`; Path A is still the default. Phase 9 is now defined as "Path B becomes the pipeline, Path A removed" (§12.2, decided 2026-10-12). |

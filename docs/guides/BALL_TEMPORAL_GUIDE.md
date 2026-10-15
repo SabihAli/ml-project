@@ -5,9 +5,9 @@ single local NVIDIA GPU (written for an RTX 3090, 24 GB). An agent or a person c
 to bottom. Every command is meant to be run from the **repo root** (the folder containing
 `gsr_pipeline/`, `scripts/` and `docs/`) unless it says otherwise.
 
-**What this guide covers today:** plan §9 **step 1, the main-detector cache**. Steps 2–6 (dataset
-builder, heatmap model, training, evaluation, export) are not built yet. §6 of this guide says
-what to do when you reach that point.
+**What this guide covers today:** plan §9 steps 1–4: the main-detector cache (§4), the temporal
+crop dataset (§5b), training (§5c) and the test gates (§5d). Steps 5–6 (export, tracker) are not
+built yet; §6 says what to do when you reach that point.
 
 **Rules for an agent following this guide:**
 - Run the checks after each step. If a check fails, stop and report the output; don't work
@@ -266,17 +266,111 @@ reads it.
 
 ---
 
-## 6. Next steps (not built yet)
+## 5b. Step 2: temporal crop dataset
 
-Plan §9, steps 2–6:
+What it does: for every ball-labelled frame it would sample, it cuts a 640×640 window from frames
+t−2, t−1 and t, placed where the runtime would put it (on the main detector's last sighting in the
+previous 15 frames), and saves the three crops side by side as one JPEG with a point label in
+`manifest.csv`. Hard frames come from `pool` (plan §6). Runs on the CPU and needs step 1's cache.
+
+Script: `scripts/ball_temporal/build_ball_temporal_dataset.py`. Output:
+`data/outputs/ball_temporal/dataset/` (about 16 GB, gitignored).
+
+Smoke test, then look at the preview sheets:
+
+```bash
+python scripts/ball_temporal/build_ball_temporal_dataset.py build --src data/gsr --out data/outputs/ball_temporal/dataset_smoke --seqs SNGS-024 SNGS-060 --workers 2
+python scripts/ball_temporal/build_ball_temporal_dataset.py preview --out data/outputs/ball_temporal/dataset_smoke --n 4
+```
+
+In `dataset_smoke/preview/page_*.jpg`, green circles (frame t) must sit on the ball, and
+negatives must contain no ball. Then delete `dataset_smoke` and run the full build (about 6 min
+with 8 workers on the dev machine; re-running resumes per sequence):
+
+```bash
+python scripts/ball_temporal/build_ball_temporal_dataset.py build --src data/gsr --out data/outputs/ball_temporal/dataset --workers 8
+```
+
+It prints a table per split and saves it as `stats.md`. Expect about 46k samples and about 7.5k
+`hard` samples in `pool`. Record the table in `PERF_LOG.md` as in §5.
+
+---
+
+## 5c. Step 3: train the heatmap specialist
+
+Model: `scripts/ball_temporal/heatmap_model.py` (ResNet-18 encoder, U-Net decoder, stride-2 heatmap
++ offset, CenterNet focal loss; plan §5). Training: `scripts/ball_temporal/train_ball_temporal.py`,
+on `train` + `pool` from step 2, validated on `select` each epoch. The first run downloads the
+ImageNet ResNet-18 weights (about 45 MB) from download.pytorch.org.
+
+Smoke test (a few minutes; checks the whole loop and writes a checkpoint):
+
+```bash
+python scripts/ball_temporal/train_ball_temporal.py --out runs/ball_temporal/smoke --channels 9 --epochs 1 --limit 6400
+```
+
+Then train both input versions, one after the other:
+
+```bash
+python scripts/ball_temporal/train_ball_temporal.py --out runs/ball_temporal/c9b --channels 9
+python scripts/ball_temporal/train_ball_temporal.py --out runs/ball_temporal/c5b --channels 5
+```
+
+- One epoch is about 48.8k samples (hard `pool` positives counted 3 times). On the RTX 3090 it
+  takes about 19 min (0.7 s/step at batch 32, GPU-bound), so 30 epochs is at most about 9.5 h per
+  run; early stopping (patience 8) usually ends it sooner.
+- Each epoch prints the `select` **score**: distance recall (peak within 15 px) averaged over the
+  thresholds at which 1%…10% of negative crops (`neg_hard`, `neg_random`) fire, overall, hard
+  and easy. `outside` crops are left out of training and of that count (they often contain a
+  real, unlabelled ball); `outside fire` is printed for reference. `best.pt` is the epoch
+  with the best score. Recall at a single 5% threshold and at 0.5 are printed too, for reference
+  only: the single-threshold recall swung 16–41% between epochs on noise and stopped the first
+  runs early (2026-10-13). `--resume` on a run from before that change re-scores its `best.pt`
+  and `last.pt` first.
+- Outputs per run: `best.pt`, `last.pt`, `history.csv`, `curves.png`. `runs/` is gitignored.
+- **If it's interrupted**, add `--resume` to the same command.
+- **If it runs out of GPU memory**, use `--batch 16 --lr 2.5e-4`. Batch 32 uses about 16 GB.
+- Don't use `channels_last`: it made this network about 4× slower on the 3090.
+
+Record each finished run (best epoch, select recall overall/hard/easy, wall time) in
+`PERF_LOG.md` as in §5.
+
+---
+
+## 5d. Step 4: test gates 1–3
+
+Script: `scripts/eval/ball_det/eval_ball_temporal.py`. It scores a checkpoint on the step 2 test
+crops (gates 1–2) and replays every frame of the `select` and `test` sequences as the runtime runs
+it (gate 3): the specialist runs only when the main detector misses, on a window centred on the
+last sighting, for up to 15 frames. The system threshold is chosen on `select` and frozen for
+`test`. A few minutes per checkpoint on the RTX 3090.
+
+```bash
+python scripts/eval/ball_det/eval_ball_temporal.py all --ckpt runs/ball_temporal/c5b/best.pt --src data/gsr --out data/outputs/ball_temporal/eval/c5b
+```
+
+- Output: `report.md` (gate tables, recall by frames since the last sighting, the `select`
+  threshold sweep), `results.json`, `test_crops.csv`.
+- `--chain main` centres the window on main-detector sightings only (as the training crops were
+  built); the default `fused` re-centres on specialist hits, as the runtime does.
+- `--test_sweep` adds the test curve at every threshold. It is a diagnostic: never choose the
+  threshold from it.
+
+Record the gate tables in `PERF_LOG.md` as in §5.
+
+---
+
+## 6. Step status and next steps
+
+Plan §9, steps 2–6 (steps 2–4 have sections above; 5–6 are not built):
 
 | step | what | status |
 |---|---|---|
-| 2 | `build_ball_temporal_dataset.py`: 3-frame crops, point labels, hard examples from `pool` | not built |
-| 3 | heatmap model and training script (single 3090) | not built |
-| 4 | evaluation: crop-level gates and the full-system gate | not built |
+| 2 | `build_ball_temporal_dataset.py`: 3-frame crops, point labels, hard examples from `pool` | **built**, §5b; done 2026-10-13 |
+| 3 | heatmap model and training script (single 3090) | **built**, §5c; done 2026-10-15 (`c9b`, `c5b`) |
+| 4 | evaluation: crop-level gates and the full-system gate | **built**, §5d; measured 2026-10-15; `select`-only threshold rule pending (plan §10 item 14) |
 | 5 | ONNX export, parity, TensorRT timing (gate 4: ≤ 5 ms on an RTX 30-series) | not built |
-| 6 | `BallTracker` | not built; after the specialist is measured |
+| 6 | `BallTracker` | not built; after step 5 (the specialist is measured, §5d) |
 
 When you reach this point, stop. Each step is added to this guide as it's built.
 

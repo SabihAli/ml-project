@@ -97,6 +97,8 @@ python -m gsr_pipeline.possession_demo --json_path data/outputs/SNGS-021/predict
 
 Step-by-step: `docs/guides/BALL_TEMPORAL_GUIDE.md` (local GPU) or
 `docs/guides/BALL_TEMPORAL_KAGGLE_GUIDE.md` (Kaggle). Plan: `docs/path_b/plans/BALL_TEMPORAL_PLAN.md`.
+The chosen model (`c5b`, a 3-frame heatmap specialist) and its results:
+`docs/architecture/BALL_TEMPORAL_ARCH.md`.
 
 ### Tests
 
@@ -126,6 +128,7 @@ The inline comments explain each tunable and where its value came from.
 | `docs/architecture/` | `GSR_PIPELINE.md` | how the pipeline works, the metric, results |
 | | `PIPELINE_EVOLUTION.md` | event taxonomy, revision semantics, Kafka mapping, open design issues |
 | | `STREAMING_ARCHITECTURE.md` | the live path and the API; build status in §8 |
+| | `BALL_TEMPORAL_ARCH.md` | the temporal ball specialist: model, training, results |
 | | `REQUIREMENTS.md` | requirements, with evidence levels |
 | `docs/path_b/plans/` | `IMPLEMENTATION_PLAN.md` | the Path B pipeline; per-phase status in §12.1 |
 | | `OPTIMIZATION_PLAN.md` | Path B latency work; build status in §7 |
@@ -150,7 +153,8 @@ gsr_pipeline/          the pipeline: stages, live path, Path B runtime (runtime/
   nbjw_calib/            vendored calibration package (own setup.py)
 api/                   FastAPI HTTP + WS service
 scripts/               export, TensorRT, parity, training and inference tools
-  ball_temporal/         ball specialist scripts (current)
+  ball_temporal/         ball specialist scripts (current): cache, dataset, model, training
+  eval/ball_det/         ball specialist evaluation (test gates)
 notebooks/path_b_eval.py   Path B end-to-end evaluation runner
 tests/                 pytest, pure logic
 docs/                  see Documentation

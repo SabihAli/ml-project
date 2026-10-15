@@ -84,8 +84,9 @@ live. See `STREAMING_ARCHITECTURE.md`.
   Ultralytics.
 - **Roles and teams:** `athlete_roles.py` assigns player/goalkeeper by team, referee or other,
   from torso colour fitted per match plus pitch position.
-- **Ball:** the main detector finds 59% of balls on the held-out test sequences. A specialist
-  is being built to raise that (`docs/path_b/plans/BALL_TEMPORAL_PLAN.md`).
+- **Ball:** the main detector finds 59% of balls on the held-out test sequences. A temporal
+  specialist (`docs/architecture/BALL_TEMPORAL_ARCH.md`) raises that to 68.6% in simulation; it
+  is trained and evaluated but not wired into the pipeline yet (`docs/path_b/plans/BALL_TEMPORAL_PLAN.md`).
 
 ---
 
