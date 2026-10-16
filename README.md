@@ -160,6 +160,7 @@ notebooks/path_b_eval.py   Path B end-to-end evaluation runner
 tests/                 pytest, pure logic
 docs/                  see Documentation
 runs/yolo26s_athlete_ball/   Path B detector: best.pt, ONNX exports and sidecars (tracked)
+runs/ball_temporal/c5c/      ball specialist: best.pt, ONNX + sidecar, training args and curves (tracked)
 data/                  gitignored: datasets/SoccerNetGS/, outputs/, pretrained_models/
 yolov8n_gsr.pt         Path A detector (the default config's detector.model_path)
 ```

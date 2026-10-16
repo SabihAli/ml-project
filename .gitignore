@@ -39,6 +39,18 @@ runs/yolo26s_athlete_ball/*
 !runs/yolo26s_athlete_ball/*.onnx
 !runs/yolo26s_athlete_ball/*.onnx.json
 !runs/yolo26s_athlete_ball/args.yaml
+# Temporal ball specialist c5c (docs/architecture/BALL_TEMPORAL_ARCH.md): weights, ONNX + sidecar,
+# training args and curves. last.pt (optimiser state, 174 MB) stays out, as do the other runs.
+!runs/ball_temporal/
+runs/ball_temporal/*
+!runs/ball_temporal/c5c/
+runs/ball_temporal/c5c/*
+!runs/ball_temporal/c5c/best.pt
+!runs/ball_temporal/c5c/ball_specialist_c5c.onnx
+!runs/ball_temporal/c5c/ball_specialist_c5c.onnx.json
+!runs/ball_temporal/c5c/args.json
+!runs/ball_temporal/c5c/history.csv
+!runs/ball_temporal/c5c/curves.png
 *.weights
 
 # IDEs

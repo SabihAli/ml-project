@@ -1,0 +1,19 @@
+{
+ "data": "data\\outputs\\ball_temporal\\dataset",
+ "out": "runs\\ball_temporal\\c5c",
+ "channels": "5",
+ "epochs": "30",
+ "patience": "8",
+ "batch": "32",
+ "lr": "0.0005",
+ "wd": "0.0001",
+ "warmup": "1.0",
+ "workers": "12",
+ "device": "cuda:0",
+ "no_amp": "False",
+ "no_pretrained": "False",
+ "limit": "0",
+ "resume": "False",
+ "seed": "0",
+ "motion_blur": "0.25"
+}

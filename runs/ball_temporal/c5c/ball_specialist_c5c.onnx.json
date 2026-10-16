@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "model": "ball_temporal_heatmap",
+  "checkpoint": "runs/ball_temporal/c5c/best.pt",
+  "epoch": 30,
+  "channels": 5,
+  "input": {
+    "name": "frames",
+    "shape": [
+      1,
+      9,
+      640,
+      640
+    ],
+    "dtype": "float32",
+    "layout": "RGB crops of frames t-2, t-1, t, values 0..255; preprocessing in graph"
+  },
+  "outputs": {
+    "heatmap": {
+      "shape": [
+        1,
+        1,
+        320,
+        320
+      ],
+      "activation": "sigmoid (host)"
+    },
+    "offset": {
+      "shape": [
+        1,
+        2,
+        320,
+        320
+      ]
+    }
+  },
+  "stride": 2,
+  "crop": 640,
+  "threshold": 0.7,
+  "onnx_sha256": "46e573f88b628fdfebe7b5b56d48d0e7cffea74a1e4ce4eb583069baeca86832"
+}

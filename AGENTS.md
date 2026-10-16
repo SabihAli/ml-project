@@ -79,7 +79,7 @@ cv_service/
 └── .gsr_venv/                 # A committed-looking but gitignored local virtualenv directory
 ```
 
-**Important**: `data/` (datasets, outputs, calibration checkpoints) is gitignored in full: no dataset is tracked. The SoccerNet GSR splits are downloaded per `docs/guides/BALL_TEMPORAL_GUIDE.md` §3. The small `valid_sample/` that used to be tracked was removed from the repo on 2026-10-12 (it is in git history). `runs/` is gitignored except the Path B detector in `runs/yolo26s_athlete_ball/` (weights, ONNX files and their sidecars).
+**Important**: `data/` (datasets, outputs, calibration checkpoints) is gitignored in full: no dataset is tracked. The SoccerNet GSR splits are downloaded per `docs/guides/BALL_TEMPORAL_GUIDE.md` §3. The small `valid_sample/` that used to be tracked was removed from the repo on 2026-10-12 (it is in git history). `runs/` is gitignored except the Path B detector in `runs/yolo26s_athlete_ball/` (weights, ONNX files and their sidecars) and the ball specialist `c5c` in `runs/ball_temporal/c5c/` (weights, ONNX + sidecar, training args, history, curves; not `last.pt`).
 
 ## Architecture
 
@@ -336,7 +336,7 @@ Do not make these changes without explicit user instruction, given the effects n
 - **Replacing or retraining `yolov8n_gsr.pt`** — this is a committed artifact others may depend on for reproducibility; treat as a deliberate, reviewed decision, not an incidental change.
 - **Modifying `gsr_pipeline/nbjw_calib/`'s vendored model code** — it is a third-party calibration package pulled in as-is; upstream-diverging edits should be minimized and clearly flagged.
 - **Removing/downgrading dependencies in `requirements.txt`** without checking all importers — several are optional/lazily-imported (`torchreid`, `easyocr`) with custom error handling; removing them silently changes failure behavior.
-- **Committing files under `data/` or `runs/`** other than the Path B detector in `runs/yolo26s_athlete_ball/` — they are deliberately gitignored (large datasets, outputs and training artifacts).
+- **Committing files under `data/` or `runs/`** other than the Path B detector in `runs/yolo26s_athlete_ball/` and the ball specialist in `runs/ball_temporal/c5c/` — they are deliberately gitignored (large datasets, outputs and training artifacts).
 - **Introducing network calls to unreviewed hosts** — the one existing network dependency (Zenodo checkpoint download in `calibrate.py`) is deliberate and documented; do not add silent new external downloads.
 
 ## Validation Requirements

@@ -25,9 +25,12 @@ doc is the place to start if the work is picked up again. Plan and decisions:
 | export | `scripts/ball_temporal/export_ball_specialist.py` |
 | in the pipeline | no; the engine auto-build it will use already exists (§6.3) |
 
-> **Artifacts are local only.** `runs/` and `data/` are gitignored, so `best.pt`, the ONNX, the
-> step 1 cache and the 67k-sample dataset exist only on the dev machine (RTX 3090). Back them up
-> before relying on them. Everything can be rebuilt from the code and the GSR download (§12).
+> **What is in git.** The `c5c` deliverables are tracked in `runs/ball_temporal/c5c/`: `best.pt`,
+> `ball_specialist_c5c.onnx` + `.json`, `args.json`, `history.csv`, `curves.png` (about 116 MB,
+> two 58 MB files). **Not tracked** (`data/` and the rest of `runs/` are gitignored): `last.pt`
+> (optimiser state, 174 MB), the other runs (`c5b`, `c9b`, ...), the step 1 cache and the 67k-sample
+> dataset. These can be rebuilt from the code and the GSR download (§12); training itself is not
+> reproducible bit for bit.
 
 ## 1. What it does
 
