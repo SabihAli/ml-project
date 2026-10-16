@@ -4,7 +4,8 @@ trt_runner.py -- TensorRT backend (tier 1) and the engine builder behind it.
 TensorRT engines are specific to the GPU model, driver and TRT version, so they cannot be
 shipped. The ONNX is the shipped artifact; each production host builds its own engine on
 first install (IMPLEMENTATION_PLAN.md section 3.2). `build_engine` here is what
-scripts/build_trt_engine.py drives.
+scripts/build_trt_engine.py drives, and `ensure_engine` is what the pipeline calls at startup:
+it builds the engine automatically when the file is missing (first launch on a host).
 
 Every engine gets a sidecar recording the environment it was built for. At startup a
 mismatch is a REFUSAL, not a warning: running an engine built for a different GPU or TRT
@@ -174,6 +175,75 @@ def build_engine(
         + "\n"
     )
     log.info("wrote %s (%.1f MB) and its sidecar", engine_path, engine_path.stat().st_size / 1e6)
+    return engine_path
+
+
+BUILD_LOCK_STALE_S = 3600     # a lock older than this is from a crashed build
+
+
+def ensure_engine(
+    onnx_path: str | Path,
+    engine_path: str | Path,
+    onnx_sha256: str,
+    auto_build: bool = True,
+    fp16: bool = True,
+) -> Path:
+    """Return `engine_path`, building it first if it does not exist (first launch on a host).
+
+    Only a *missing* engine is built. An engine that exists but does not match this host is
+    left alone: `check_sidecar` refuses it and the caller falls back a tier, telling the
+    operator to rebuild (plan 3.2).
+
+    The build writes to temporary names and renames the sidecar, then the engine, so a
+    killed build never leaves an engine file behind; its presence means the build finished.
+    A `.building` lock file stops two processes building the same engine at once: the
+    second one gets an error (and falls back a tier) rather than waiting minutes.
+    """
+    onnx_path, engine_path = Path(onnx_path), Path(engine_path)
+    if engine_path.exists():
+        return engine_path
+    if not auto_build:
+        raise FileNotFoundError(
+            f"no engine at {engine_path.name} and auto-build is off; "
+            "run scripts/build_trt_engine.py on this host"
+        )
+    if not torch.cuda.is_available():
+        raise RuntimeError("no CUDA device; cannot build a TensorRT engine")
+    try:
+        import tensorrt  # noqa: F401 -- fail fast with the install hint below
+    except ImportError as exc:
+        raise ImportError(
+            f"no engine at {engine_path.name}, and tensorrt is not installed to build one. "
+            "Install the NVIDIA TensorRT Python package matching this host's CUDA version."
+        ) from exc
+
+    import os
+    import time
+
+    engine_path.parent.mkdir(parents=True, exist_ok=True)
+    lock = engine_path.with_name(engine_path.name + ".building")
+    if lock.exists() and time.time() - lock.stat().st_mtime > BUILD_LOCK_STALE_S:
+        log.warning("removing stale build lock %s", lock.name)
+        lock.unlink(missing_ok=True)
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError as exc:
+        raise RuntimeError(f"another process is building {engine_path.name} ({lock.name} exists)") from exc
+    os.close(fd)
+    tmp = engine_path.with_name(engine_path.name + ".tmp")
+    try:
+        log.warning(
+            "TensorRT engine %s not found: building it now from %s. This happens once per "
+            "host (first launch) and takes several minutes; later launches load it directly.",
+            engine_path.name, onnx_path.name,
+        )
+        build_engine(onnx_path, tmp, onnx_sha256, fp16=fp16)
+        sidecar_path_for(tmp).replace(sidecar_path_for(engine_path))
+        tmp.replace(engine_path)
+    finally:
+        tmp.unlink(missing_ok=True)
+        sidecar_path_for(tmp).unlink(missing_ok=True)
+        lock.unlink(missing_ok=True)
     return engine_path
 
 

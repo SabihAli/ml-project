@@ -15,6 +15,74 @@ changed. Numbers from a machine that is not the production host are tagged as su
 
 ---
 
+## 2026-10-16: ball temporal plan step 4c, `c5c` (more clips + motion blur)
+
+Tag: `rtx-3090`. `train_ball_temporal.py --channels 5 --motion_blur 0.25`, 51,866 training crops
+(80.7k samples per epoch), 30 epochs at 15 min (7.5 h); stopped at the epoch cap, best at epoch 30.
+`select` score 74.0% (hard 57.9%, easy 95.6%), up from `c5b`'s 71.3%; still rising by about 0.1
+per epoch at the end, with the learning rate at its floor. Gates with the fixed `spec_precision`
+rule (no re-tuning). Report: `data/outputs/ball_temporal/eval/c5c/report.md`.
+
+| | `c5b` | **`c5c`** |
+|---|---|---|
+| crop recall, all / hard (5% `select` negative FPR) | 72.6% / 58.5% | 69.9% / 54.5% |
+| negative crops firing at that threshold | 5.4% | 3.6% |
+| system threshold (`select`, >= 90% specialist outputs on the ball) | 0.75 | 0.70 |
+| **system recall (main alone 59.36%)** | 68.56% (+9.2) | **69.47% (+10.1)** |
+| **system precision (main alone 85.29%)** | 86.52% (+1.2) | **86.51% (+1.2)** |
+| gate 3 | FAIL | **PASS** (by 0.1 points) |
+
+- Crop numbers are at different operating points (the 5% threshold sits higher for `c5c`, which
+  fires on fewer negatives), so they are not a like-for-like drop.
+- Recall by gap since the last sighting: 66% at 1 frame (`c5b` 60%), then 18%, 9%, 9%, 4%, 1%.
+- Longest miss unchanged (2.7 s mean / 9.9 s max).
+
+---
+
+## 2026-10-15: ball temporal plan step 5 (export) and step 4c data
+
+Tag: `rtx-3090`.
+
+- **Export (`c5b`):** `scripts/ball_temporal/export_ball_specialist.py` →
+  `runs/ball_temporal/c5b/ball_specialist_c5b.onnx` (57.9 MB, opset 17, static 1×9×640×640,
+  preprocessing in the graph) + sidecar. Parity against PyTorch FP32 on 64 test crops, ORT CPU:
+  max point diff 0.0000 px, max confidence diff 1.2e-6, **PASS**. ORT GPU not checked: the CUDA
+  execution provider did not activate in `.ball_venv` (CUDA/cuDNN runtime libraries not found).
+- **Engine build at startup:** `trt_runner.ensure_engine`, used by `select_backend` and NBJW.
+  8 new pure-logic tests; `pytest tests/` 59 passed. No engine built (tensorrt not installed).
+- **More clips:** the 49 GSR `test` sequences added to `pool` (plan §10 item 15). Main detector
+  over them: 12 min, 16 ms/frame. Cache summary now:
+
+| split | sequences | frames with GT ball | main recall | hard frames |
+|---|---|---|---|---|
+| train | 57 | 40,234 | 84.32% | 6,238 |
+| pool | 82 | 56,991 | 69.60% | 16,853 |
+| select | 10 | 7,074 | 63.95% | 2,492 |
+| test | 15 | 10,178 | 59.36% | 4,013 |
+
+  The main detector does better on the new clips (pool recall 61.6% → 69.6%), but still far
+  below its 84% on the clips it trained on.
+- **Dataset rebuilt:** 66,999 samples (11.3 min); `pool` hard positives 7,563 → **14,432**;
+  51,866 training crops (was 32,364).
+
+---
+
+## 2026-10-15: ball temporal plan step 4b, gate 3 second look (`c5b`)
+
+Tag: `rtx-3090`. Same evaluator and settings as step 4, new threshold rule fixed before the run
+(plan §10 item 14): the lowest `select` threshold at which >= 90% of the specialist's own outputs
+on ball-labelled frames are on the labelled ball. Report: `data/outputs/ball_temporal/eval/c5b_rule2/report.md`.
+
+- The rule picks **0.75**, the same threshold as the first rule, so the result is unchanged:
+  recall 68.56% (+9.2), precision 86.52% (+1.2). **Gate 3: FAIL by 0.8 points.**
+- On `select`, specialist outputs are 84–87% on the labelled ball from 0.45 to 0.70 and reach 90%
+  only at 0.75 (on `test` at 0.75: 95.4%). Some "misses" on `select` may be real but unlabelled
+  balls (spare balls; see the step 2 correction), so this share is a lower bound.
+- The rule is not changed again: a third rule chosen after seeing this would be tuning on test.
+  Both rules are recorded; the diagnostic test sweep (step 4 entry) stays diagnostic.
+
+---
+
 ## 2026-10-15: ball temporal plan step 4, test gates 1-3
 
 Tag: `rtx-3090`. Script: `scripts/eval/ball_det/eval_ball_temporal.py`. 15 test sequences, 15 px

@@ -179,9 +179,24 @@ def test_missing_engine_is_reported_with_the_fix(tmp_path, monkeypatch):
         "gsr_pipeline.runtime.ort_runner.OrtRunner",
         lambda path, device="cpu", **kw: FakeRunner("ort_gpu"),
     )
-    sel = select_backend(art, device="cpu")
+    sel = select_backend(art, device="cpu", auto_build=False)
     assert sel.backend is Backend.ORT_GPU
     assert "build_trt_engine.py" in sel.rejected[0][1]
+
+
+def test_missing_engine_without_tensorrt_says_what_to_install(tmp_path, monkeypatch):
+    import sys
+    art = ModelArtifact.load(_write_artifact(tmp_path))
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setitem(sys.modules, "tensorrt", None)      # import tensorrt -> ImportError
+    monkeypatch.setattr(
+        "gsr_pipeline.runtime.ort_runner.OrtRunner",
+        lambda path, device="cpu", **kw: FakeRunner("ort_gpu"),
+    )
+    sel = select_backend(art, device="cpu")
+    assert sel.backend is Backend.ORT_GPU
+    assert "tensorrt is not installed" in sel.rejected[0][1]
+    assert not art.engine_path.exists()
 
 
 def test_warm_up_failure_rejects_the_tier(tmp_path, monkeypatch):
@@ -246,3 +261,97 @@ def test_check_sidecar_catches_a_re_exported_onnx(tmp_path):
     }))
     with pytest.raises(SidecarMismatch, match="different ONNX"):
         check_sidecar(engine, "b" * 64)
+
+
+# ------------------------------------------------------------------ engine auto-build
+
+
+@pytest.fixture
+def fake_trt_host(monkeypatch):
+    """A host that looks like it has CUDA and TensorRT, with a builder that records calls
+    instead of compiling anything."""
+    import sys
+    import types
+
+    from gsr_pipeline.runtime import trt_runner
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setitem(sys.modules, "tensorrt", types.ModuleType("tensorrt"))
+    calls = []
+
+    def fake_build(onnx_path, engine_path, onnx_sha256, fp16=True, workspace_gb=4.0):
+        calls.append(Path(engine_path))
+        Path(engine_path).write_bytes(b"engine")
+        sidecar_path_for(engine_path).write_text(json.dumps({"schema": 1, "onnx_sha256": onnx_sha256}))
+        return Path(engine_path)
+
+    monkeypatch.setattr(trt_runner, "build_engine", fake_build)
+    return calls
+
+
+def test_ensure_engine_leaves_an_existing_engine_alone(tmp_path, fake_trt_host):
+    from gsr_pipeline.runtime.trt_runner import ensure_engine
+    engine = tmp_path / "m_fp16.engine"
+    engine.write_bytes(b"old")
+    assert ensure_engine(tmp_path / "m.onnx", engine, "a" * 64) == engine
+    assert fake_trt_host == [] and engine.read_bytes() == b"old"
+
+
+def test_ensure_engine_builds_a_missing_engine_once(tmp_path, fake_trt_host):
+    from gsr_pipeline.runtime.trt_runner import ensure_engine
+    engine = tmp_path / "m_fp16.engine"
+    ensure_engine(tmp_path / "m.onnx", engine, "a" * 64)
+    ensure_engine(tmp_path / "m.onnx", engine, "a" * 64)
+    assert len(fake_trt_host) == 1                       # second launch loads, no rebuild
+    assert engine.read_bytes() == b"engine"
+    assert json.loads(sidecar_path_for(engine).read_text())["onnx_sha256"] == "a" * 64
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["m_fp16.engine", "m_fp16.engine.json"]
+
+
+def test_ensure_engine_off_means_no_build(tmp_path, fake_trt_host):
+    from gsr_pipeline.runtime.trt_runner import ensure_engine
+    with pytest.raises(FileNotFoundError, match="auto-build is off"):
+        ensure_engine(tmp_path / "m.onnx", tmp_path / "m_fp16.engine", "a" * 64, auto_build=False)
+    assert fake_trt_host == []
+
+
+def test_ensure_engine_refuses_while_another_build_holds_the_lock(tmp_path, fake_trt_host):
+    from gsr_pipeline.runtime.trt_runner import ensure_engine
+    (tmp_path / "m_fp16.engine.building").write_text("")
+    with pytest.raises(RuntimeError, match="another process is building"):
+        ensure_engine(tmp_path / "m.onnx", tmp_path / "m_fp16.engine", "a" * 64)
+    assert fake_trt_host == []
+
+
+def test_ensure_engine_failed_build_leaves_nothing_behind(tmp_path, monkeypatch, fake_trt_host):
+    from gsr_pipeline.runtime import trt_runner
+
+    def broken_build(onnx_path, engine_path, onnx_sha256, fp16=True, workspace_gb=4.0):
+        Path(engine_path).write_bytes(b"half-written")
+        raise RuntimeError("builder crashed")
+
+    monkeypatch.setattr(trt_runner, "build_engine", broken_build)
+    with pytest.raises(RuntimeError, match="builder crashed"):
+        trt_runner.ensure_engine(tmp_path / "m.onnx", tmp_path / "m_fp16.engine", "a" * 64)
+    assert list(tmp_path.iterdir()) == []                # no engine, no temp file, no lock
+
+
+def test_select_backend_builds_a_missing_engine_then_loads_it(tmp_path, monkeypatch, fake_trt_host):
+    art = ModelArtifact.load(_write_artifact(tmp_path))
+    monkeypatch.setattr("gsr_pipeline.runtime.trt_runner.check_sidecar", lambda *a, **k: {})
+    monkeypatch.setattr("gsr_pipeline.runtime.trt_runner.TrtRunner",
+                        lambda *a, **k: FakeRunner("tensorrt"))
+    sel = select_backend(art, device="cpu")
+    assert sel.backend is Backend.TENSORRT
+    assert fake_trt_host == [art.engine_path.with_name(art.engine_path.name + ".tmp")]
+    assert art.engine_path.exists()
+
+
+def test_select_backend_without_auto_build_falls_back(tmp_path, monkeypatch, fake_trt_host):
+    art = ModelArtifact.load(_write_artifact(tmp_path))
+    monkeypatch.setattr("gsr_pipeline.runtime.ort_runner.OrtRunner",
+                        lambda *a, **k: FakeRunner("ort"))
+    sel = select_backend(art, device="cpu", auto_build=False)
+    assert sel.backend is Backend.ORT_GPU
+    assert "auto-build is off" in sel.rejected[0][1]
+    assert fake_trt_host == []

@@ -54,6 +54,7 @@ class AthleteBallDetector:
         device: str = "cuda:0",
         backend: Optional[str] = None,
         batch_size: int = 8,
+        auto_build_engine: bool = True,
     ) -> None:
         """
         Args:
@@ -70,6 +71,9 @@ class AthleteBallDetector:
             batch_size: frames per process_sequence chunk. The engine is static batch 1,
                 so this is a loop bound, not a real batch -- kept for API compatibility
                 with detect.py and for the batch path's future batch-8 profile (plan 11).
+            auto_build_engine: build the TensorRT engine at startup if it is missing (first
+                launch on a host; takes minutes, once). False keeps the old behaviour: no
+                engine means falling back to ONNX Runtime.
         """
         self.artifact = ModelArtifact.load(onnx_path)
         self.athlete_conf = athlete_conf
@@ -80,6 +84,7 @@ class AthleteBallDetector:
             self.artifact,
             prefer=Backend(backend) if backend else None,
             device=device,
+            auto_build=auto_build_engine,
         )
         self.selection = selection
         self.runner = selection.runner

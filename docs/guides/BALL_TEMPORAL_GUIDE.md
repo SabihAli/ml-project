@@ -6,7 +6,7 @@ to bottom. Every command is meant to be run from the **repo root** (the folder c
 `gsr_pipeline/`, `scripts/` and `docs/`) unless it says otherwise.
 
 **What this guide covers today:** plan §9 steps 1–4: the main-detector cache (§4), the temporal
-crop dataset (§5b), training (§5c) and the test gates (§5d). Steps 5–6 (export, tracker) are not
+crop dataset (§5b), training (§5c), the test gates (§5d) and export (§5e). Step 6 (tracker) is not
 built yet; §6 says what to do when you reach that point.
 
 **Rules for an agent following this guide:**
@@ -112,8 +112,10 @@ version `nvidia-smi` reports (e.g. `cu121`, `cu124`, `cu126`) and re-check.
 
 ## 3. Get the dataset
 
-The scripts need the SoccerNet GSR `train` and `valid` splits (`gamestate-2024`), extracted into
-their own folder, **`data/gsr/`**.
+The scripts need the SoccerNet GSR `train`, `valid` and `test` splits (`gamestate-2024`), extracted
+into their own folder, **`data/gsr/`**. GSR `test` (49 labelled sequences, added 2026-10-15) joins
+our `pool` split: the main detector never trained on it. It is not our held-out `test`, which is
+15 `valid` sequences.
 
 > Extract into `data/gsr/` as shown, not into `data/datasets/SoccerNetGS/`. That folder may hold
 > a partial set of sequences from earlier work, and the scripts would pick those up instead of
@@ -126,24 +128,25 @@ pip install SoccerNet
 python - <<'EOF'
 from SoccerNet.Downloader import SoccerNetDownloader
 d = SoccerNetDownloader(LocalDirectory="data/gsr_download")
-d.downloadDataTask(task="gamestate-2024", split=["train", "valid"])
+d.downloadDataTask(task="gamestate-2024", split=["train", "valid", "test"])
 EOF
 find data/gsr_download -name "*.zip" -exec ls -la {} \;
 ```
 
 The GSR splits need no password. If the downloader asks for one anyway, stop and ask the user;
-don't guess. Expect a `train.zip` and a `valid.zip`.
+don't guess. Expect `train.zip`, `valid.zip` and `test.zip`.
 
 ### 3.2 Extract
 
 ```bash
-mkdir -p data/gsr/train data/gsr/valid
+mkdir -p data/gsr/train data/gsr/valid data/gsr/test
 unzip -q "$(find data/gsr_download -name train.zip | head -1)" -d data/gsr/train
 unzip -q "$(find data/gsr_download -name valid.zip | head -1)" -d data/gsr/valid
+unzip -q "$(find data/gsr_download -name test.zip | head -1)" -d data/gsr/test
 ```
 
 On Windows without `unzip`, use PowerShell:
-`Expand-Archive <path>\train.zip -DestinationPath data\gsr\train` (and the same for `valid`).
+`Expand-Archive <path>\train.zip -DestinationPath data\gsr\train` (and the same for `valid` and `test`).
 
 **Check:**
 
@@ -151,7 +154,7 @@ On Windows without `unzip`, use PowerShell:
 find data/gsr -name Labels-GameState.json | wc -l
 ```
 
-Expect **115** (57 train + 58 valid). The script in §4.1 checks the split assignment too.
+Expect **164** (57 train + 58 valid + 49 test). The script in §4.1 checks the split assignment too.
 
 Once §4 is done, the zips under `data/gsr_download/` can be deleted to free space. `data/` is
 gitignored.
@@ -160,7 +163,7 @@ gitignored.
 
 ## 4. Step 1: main-detector cache
 
-What it does: runs the main detector over every frame of all 115 sequences (about 86k frames)
+What it does: runs the main detector over every frame of all 164 sequences (about 123k frames)
 and saves, per sequence, every ball detection with confidence ≥ 0.05 (at most 5 per frame) next
 to the ground-truth balls. The next step uses it to find **hard frames** (GSR has a ball, the
 main detector missed it) and to place crops where the runtime would.
@@ -179,7 +182,7 @@ Expect exactly:
 | split | sequences | meaning |
 |---|---|---|
 | `train` | 57 | GSR train; the main detector trained on these, so easy examples only |
-| `pool` | 33 | valid, not select or test; the source of hard examples |
+| `pool` | 82 | 33 valid sequences not in select or test, plus the 49 GSR test sequences; the source of hard examples |
 | `select` | 10 | valid; model selection |
 | `test` | 15 | `021 022 023 026 030 033 036 040 044 047 050 054 080 086 090` |
 
@@ -211,8 +214,9 @@ python scripts/ball_temporal/cache_main_detections.py run --src data/gsr --out d
 ```
 
 - Runs in the foreground and prints one line per sequence:
-  `[gpu0] k/115 split/SNGS-xxx: N frames in Ts (X ms/frame), elapsed M min`.
-- **Time estimate:** smoke-test ms/frame × 86,000. It hasn't been measured on a 3090 yet.
+  `[gpu0] k/164 split/SNGS-xxx: N frames in Ts (X ms/frame), elapsed M min`.
+- **Time estimate:** smoke-test ms/frame × 123,000. On the RTX 3090 it ran at 16–26 ms/frame
+  (about 30 min for the first 115 sequences, 12 min for the 49 GSR test ones).
 - **If it's interrupted**, run the same command again. Finished sequences print `cached` and are
   skipped; a sequence in progress is redone from its start.
 - **If the GPU sits well under 80% busy** (check with `nvidia-smi` in another terminal), JPEG
@@ -226,7 +230,7 @@ python scripts/ball_temporal/cache_main_detections.py run --src data/gsr --out d
 for s in train pool select test; do echo "$s $(ls data/outputs/ball_temporal/main_cache/$s 2>/dev/null | grep -c '\.json$')"; done
 ```
 
-Expect `train 57`, `pool 33`, `select 10`, `test 15`.
+Expect `train 57`, `pool 82`, `select 10`, `test 15`.
 
 ### 4.4 Summary
 
@@ -291,7 +295,7 @@ with 8 workers on the dev machine; re-running resumes per sequence):
 python scripts/ball_temporal/build_ball_temporal_dataset.py build --src data/gsr --out data/outputs/ball_temporal/dataset --workers 8
 ```
 
-It prints a table per split and saves it as `stats.md`. Expect about 46k samples and about 7.5k
+It prints a table per split and saves it as `stats.md`. Expect about 67k samples and about 14.4k
 `hard` samples in `pool`. Record the table in `PERF_LOG.md` as in §5.
 
 ---
@@ -330,6 +334,8 @@ python scripts/ball_temporal/train_ball_temporal.py --out runs/ball_temporal/c5b
 - Outputs per run: `best.pt`, `last.pt`, `history.csv`, `curves.png`. `runs/` is gitignored.
 - **If it's interrupted**, add `--resume` to the same command.
 - **If it runs out of GPU memory**, use `--batch 16 --lr 2.5e-4`. Batch 32 uses about 16 GB.
+- `--motion_blur 0.25` (used for `c5c`) gives a quarter of training samples a linear motion blur.
+  Default 0, so the earlier runs reproduce.
 - Don't use `channels_last`: it made this network about 4× slower on the 3090.
 
 Record each finished run (best epoch, select recall overall/hard/easy, wall time) in
@@ -360,16 +366,36 @@ Record the gate tables in `PERF_LOG.md` as in §5.
 
 ---
 
+## 5e. Step 5: ONNX export and the engine build
+
+Export a checkpoint to ONNX, with a sidecar, and check the ONNX against PyTorch on 64 real test
+crops (pass: points within 0.5 px, confidence within 1e-3):
+
+```bash
+python scripts/ball_temporal/export_ball_specialist.py --ckpt runs/ball_temporal/c5b/best.pt --out runs/ball_temporal/c5b/ball_specialist_c5b.onnx --threshold 0.75
+```
+
+The input is the three crops as one float tensor (1, 9, 640, 640), RGB, 0–255, frames t−2, t−1,
+t; the preprocessing is inside the graph. Outputs: `heatmap` logits and `offset`.
+
+No TensorRT engine is built here. The pipeline builds `<onnx stem>_fp16.engine` beside the ONNX
+the first time it starts on a host, or whenever the engine file is missing
+(`gsr_pipeline/runtime/trt_runner.ensure_engine`; config `auto_build_engine`). That needs CUDA and
+the `tensorrt` package. The specialist is not loaded by the pipeline yet (implementation plan
+Phase 6), so for now this applies to the athlete/ball detector and the NBJW calibration networks.
+
+---
+
 ## 6. Step status and next steps
 
-Plan §9, steps 2–6 (steps 2–4 have sections above; 5–6 are not built):
+Plan §9, steps 2–6 (steps 2–5 have sections above; 6 is not built):
 
 | step | what | status |
 |---|---|---|
 | 2 | `build_ball_temporal_dataset.py`: 3-frame crops, point labels, hard examples from `pool` | **built**, §5b; done 2026-10-13 |
 | 3 | heatmap model and training script (single 3090) | **built**, §5c; done 2026-10-15 (`c9b`, `c5b`) |
-| 4 | evaluation: crop-level gates and the full-system gate | **built**, §5d; measured 2026-10-15; `select`-only threshold rule pending (plan §10 item 14) |
-| 5 | ONNX export, parity, TensorRT timing (gate 4: ≤ 5 ms on an RTX 30-series) | not built |
+| 4 | evaluation: crop-level gates and the full-system gate | **built**, §5d; measured 2026-10-15; gate 3 fails by 0.8 points under both threshold rules (plan §10 item 14) |
+| 5 | ONNX export, parity, engine build at pipeline startup | **built**, §5e; 2026-10-15. TensorRT timing (gate 4) deferred (user, 2026-10-15) |
 | 6 | `BallTracker` | not built; after step 5 (the specialist is measured, §5d) |
 
 When you reach this point, stop. Each step is added to this guide as it's built.

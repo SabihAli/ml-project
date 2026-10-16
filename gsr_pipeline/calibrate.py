@@ -153,11 +153,13 @@ class _TorchNet:
             return self.model(x)
 
 
-def _nbjw_runner(onnx_path: Optional[str], backend: str, device: str, torch_model, fp16: bool):
+def _nbjw_runner(onnx_path: Optional[str], backend: str, device: str, torch_model, fp16: bool,
+                 auto_build_engine: bool = True):
     """Pick the forward-pass backend for one NBJW network.
 
-    `auto` tries TensorRT (an engine next to the ONNX, built by scripts/export_nbjw.py
-    --build_engine and checked against its sidecar), then ONNX Runtime GPU, then torch.
+    `auto` tries TensorRT (an engine next to the ONNX, checked against its sidecar; built here
+    on first launch if it is missing and auto_build_engine is on, or ahead of time by
+    scripts/export_nbjw.py --build_engine), then ONNX Runtime GPU, then torch.
     An explicitly named backend that cannot load raises instead of falling back.
     """
     on_cuda = str(device).startswith("cuda")
@@ -175,10 +177,10 @@ def _nbjw_runner(onnx_path: Optional[str], backend: str, device: str, torch_mode
     for tier in tiers:
         try:
             if tier == "tensorrt":
-                from gsr_pipeline.runtime.trt_runner import TrtRunner, check_sidecar
-                if not engine.exists():
-                    raise FileNotFoundError(f"no engine at {engine}")
-                check_sidecar(engine, sha256_file(onnx))
+                from gsr_pipeline.runtime.trt_runner import TrtRunner, check_sidecar, ensure_engine
+                digest = sha256_file(onnx)
+                ensure_engine(onnx, engine, digest, auto_build=auto_build_engine)
+                check_sidecar(engine, digest)
                 return TrtRunner(engine, device=device if on_cuda else "cuda:0")
             if tier in ("ort_gpu", "ort_cpu"):
                 from gsr_pipeline.runtime.ort_runner import OrtRunner
@@ -213,6 +215,7 @@ class NBJWKeypointDetector:
         onnx_l: Optional[str] = None,
         fp16: bool = False,
         fast_decode: bool = True,
+        auto_build_engine: bool = True,
     ) -> None:
         import torch
 
@@ -225,8 +228,8 @@ class NBJWKeypointDetector:
 
         self.device = device
         self.model_kp, self.model_l = load_nbjw_models(checkpoint_kp, checkpoint_l, device)
-        self.net_kp = _nbjw_runner(onnx_kp, backend, device, self.model_kp, fp16)
-        self.net_l = _nbjw_runner(onnx_l, backend, device, self.model_l, fp16)
+        self.net_kp = _nbjw_runner(onnx_kp, backend, device, self.model_kp, fp16, auto_build_engine)
+        self.net_l = _nbjw_runner(onnx_l, backend, device, self.model_l, fp16, auto_build_engine)
         self.input_device = self.net_kp.device
         log.info("NBJWKeypointDetector ready: %s, input on %s", self.backend_name, self.input_device)
 

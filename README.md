@@ -70,7 +70,8 @@ for the Path B detector, and `--start_frame 168` to skip SNGS-021's kickoff.
 
 ```bash
 python scripts/export_athlete_detector.py          # ONNX export (ultralytics>=8.4.0)
-python scripts/build_trt_engine.py                 # TensorRT engine, on the GPU host only
+python scripts/build_trt_engine.py                 # TensorRT engine ahead of time (optional: the pipeline
+                                                   # builds a missing engine itself on first launch)
 python scripts/parity_gate.py --frames_per_sequence 30 --backend ort_cpu --device cpu
 python notebooks/path_b_eval.py --data_root <valid dir> --output_dir <out> --limit 3 --max_frames 100   # CUDA host
 ```
@@ -97,7 +98,7 @@ python -m gsr_pipeline.possession_demo --json_path data/outputs/SNGS-021/predict
 
 Step-by-step: `docs/guides/BALL_TEMPORAL_GUIDE.md` (local GPU) or
 `docs/guides/BALL_TEMPORAL_KAGGLE_GUIDE.md` (Kaggle). Plan: `docs/path_b/plans/BALL_TEMPORAL_PLAN.md`.
-The chosen model (`c5b`, a 3-frame heatmap specialist) and its results:
+The current model (`c5c`, a 3-frame heatmap specialist), its results and history:
 `docs/architecture/BALL_TEMPORAL_ARCH.md`.
 
 ### Tests

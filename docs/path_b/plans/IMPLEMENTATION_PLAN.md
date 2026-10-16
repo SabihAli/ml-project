@@ -244,13 +244,20 @@ can't be shipped prebuilt.
   a parity-gate failure could not be attributed to preprocessing versus NMS, which is
   the one thing §3.5 exists to distinguish. One shared implementation also means the
   tier-3 CPU gate genuinely exercises the same post-processing the GPU tiers will use.
-- *First install (production host):* `scripts/build_trt_engine.py` builds
-  `best_<h>x<w>_fp16.engine` with the TensorRT Python builder: FP16 flag, static batch 1, and
-  the builder optimisation level at its maximum (a slower build for a faster engine; it runs
-  once). It writes a sidecar with GPU name, compute capability, driver, CUDA and TRT versions,
-  and the ONNX checksum.
+- *First install (production host):* the engine `best_<h>x<w>_fp16.engine` is built with the
+  TensorRT Python builder: FP16 flag, static batch 1, and the builder optimisation level at its
+  maximum (a slower build for a faster engine; it runs once). It writes a sidecar with GPU name,
+  compute capability, driver, CUDA and TRT versions, and the ONNX checksum. **Since 2026-10-15
+  the pipeline builds it itself at startup** whenever the engine file is missing
+  (`trt_runner.ensure_engine`, called by `select_backend` and by NBJW's `_nbjw_runner`;
+  config `detector_b.auto_build_engine` and `calibration.auto_build_engine`, both default
+  true). The build writes temporary files and renames them when done, so a killed build leaves
+  no engine; a `.building` lock stops two processes building at once (the second falls back a
+  tier). Without TensorRT installed, or with auto-build off, a missing engine still means
+  falling back to ORT GPU. `scripts/build_trt_engine.py` remains for building ahead of time.
 - *Startup:* on a sidecar mismatch, **refuse the engine**, log at ERROR that
-  `build_trt_engine.py` must be re-run, and continue on ORT GPU.
+  `build_trt_engine.py` must be re-run, and continue on ORT GPU. Auto-build covers only a
+  *missing* engine: a mismatched one is never overwritten automatically.
 
 ### 3.3 Runtime: a thin runner, not Ultralytics
 
@@ -764,14 +771,14 @@ instead, and the perf baseline is picked up when Phase 0 lands on a CUDA host.
 
 | Phase | Status | What exists / what is missing |
 |---|---|---|
-| 0 | **Not started** | Only `pytest` exists (51 tests). No `perf.py`, `/metrics`, `perf_report.py`, NVML or Nsight. Latency today comes from `notebooks/path_b_eval.py`'s sequential timers. |
+| 0 | **Not started** | Only `pytest` exists (59 tests). No `perf.py`, `/metrics`, `perf_report.py`, NVML or Nsight. Latency today comes from `notebooks/path_b_eval.py`'s sequential timers. |
 | 1a | **Closed** 2026-09-27 | Export, runners, `AthleteBallDetector`, backend fallback, 2-class `evaluate_detection`, parity gate on ORT CPU. |
 | 1b | **Partial** | ORT GPU parity on a T4 passes (min IoU 0.99998, 0 count mismatches, 3 sequences). Missing: detector TRT FP16 engine and its gate, fallbacks forced live, the square-vs-rectangular decision, and a run on the RTX 30-series host. |
 | 2 | **Not started** | No `gsr_pipeline/live/`, NVDEC reader, frame ring, stage threads, `FrameDetections` or orjson. Path B is not wired into `GSRPipeline` or the API. |
 | 3 | **Partial** | Camera motion is built (`camera_motion.py`). ByteTrack steps on empty frames. Missing: detection-index association, array input, BoT-SORT A/B, AssA/IDF1 table. |
 | 4 | **Mostly built** | See §7 build status. Missing: FP16 projection gate, multi-sequence K choice, dropping implausible projections, `h_source` on the WS wire. |
 | 5 | **Not started** | `athlete_roles.py` exists as a one-shot batch classifier only; no live vote/lock, GPU descriptors or half-time flip. Role and team accuracy on GT: 95.5% and 98.2% (T4 run, 3 sequences). |
-| 6 | **Not started** (runtime) | No crop planner, `BallSpecialist`, stub, or `BallTracker`. The eval runner uses the top-confidence ball under one constant track ID. The specialist model itself is trained and gate-tested (`c5b`, 2026-10-15; `BALL_TEMPORAL_PLAN.md` §9, `docs/architecture/BALL_TEMPORAL_ARCH.md`); it outputs a point, not a box, so §5.3's interface changes when it lands. |
+| 6 | **Not started** (runtime) | No crop planner, `BallSpecialist`, stub, or `BallTracker`. The eval runner uses the top-confidence ball under one constant track ID. The specialist model itself is trained, gate-tested and exported to ONNX (`c5c`, 2026-10-16; `BALL_TEMPORAL_PLAN.md` §9, `docs/architecture/BALL_TEMPORAL_ARCH.md`); it outputs a point, not a box, so §5.3's interface changes when it lands. |
 | 7 | **Not started** | Latency work moved to `docs/path_b/plans/OPTIMIZATION_PLAN.md` (its Phases 0–1 built 2026-10-07). |
 | 8 | **Not started** | |
 | 9 | **Partial, as an eval** | `notebooks/path_b_eval.py` runs Path B batch end to end to GS-HOTA (T4, 3×100 frames: persons 58.95%, with_ball 57.75%, jersey ignored). Not in `gsr_pipeline/`; Path A is still the default. Phase 9 is now defined as "Path B becomes the pipeline, Path A removed" (§12.2, decided 2026-10-12). |

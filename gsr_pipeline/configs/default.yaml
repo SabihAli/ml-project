@@ -29,6 +29,9 @@ detector_b:
                            # Pin a tier only to debug or to force the degraded path; a
                            # pinned tier that is unavailable raises instead of falling back.
   batch_size: 8
+  auto_build_engine: true  # build the TensorRT engine next to the ONNX on first launch (or
+                           # whenever the engine file is missing); takes minutes, once per
+                           # host. false: no engine means falling back to ONNX Runtime.
   # NMS iou (0.7) and max_det (300) are NOT set here. They come from the ONNX sidecar,
   # which carries the training config's values -- keeping them in one place stops the
   # runtime and the parity gate's reference from drifting apart (plan 3.5).
@@ -60,6 +63,9 @@ calibration:
   onnx_kp: "data/pretrained_models/calibration/nbjw_kp_540x960.onnx"
   onnx_l: "data/pretrained_models/calibration/nbjw_lines_540x960.onnx"
   fp16: false                 # torch backend on CUDA only: autocast FP16
+  auto_build_engine: true     # tensorrt/auto backends: build the NBJW engines next to the ONNX
+                              # on first launch (or whenever an engine file is missing); takes
+                              # minutes, once per host. Irrelevant for backend: torch.
   fast_decode: true           # gsr_pipeline/nbjw_fast_decode.py: same keypoints as the vendored
                               # decode, faster (separable max-pool, no Python loops). false =
                               # the reference, for parity checks (scripts/parity_pipeline.py).

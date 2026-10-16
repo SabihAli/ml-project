@@ -1,11 +1,12 @@
 # Ball detection beyond the main detector: plan
 
-Status (2026-10-15): **steps 1–4 of §9 done; the specialist is chosen (`c5b`).** v1, a
-single-frame YOLO26s on 640×640 crops, was scratched (§1). Its replacement sees **three frames**
-(§4), predicts a **point** (§5) and trains on **hard examples** (§6). On the 15 test sequences it
-passes gate 1 and adds +9.2 recall points with +1.2 precision at the system level (gate 3 needs
-+10; §8, §10 items 11–14). Next: a `select`-only threshold rule, then export (step 5). The ball
-tracker (§7) is not built. Model write-up: `docs/architecture/BALL_TEMPORAL_ARCH.md`.
+Status (2026-10-16): **steps 1–5 of §9 done (step 5 without TensorRT timing); the specialist is
+`c5c`** (§10 item 18). v1, a single-frame YOLO26s on 640×640 crops, was scratched (§1). Its
+replacement sees **three frames** (§4), predicts a **point** (§5) and trains on **hard examples**
+(§6). On the 15 test sequences, main detector + `c5c` raises ball recall from 59.4% to 69.5%
+(+10.1) and precision from 85.3% to 86.5%: gates 1 and 3 pass. Not wired into the pipeline
+(implementation plan Phase 6); the ball tracker (§7) is not built. Model write-up and history:
+`docs/architecture/BALL_TEMPORAL_ARCH.md`.
 
 How to run it: `docs/guides/BALL_TEMPORAL_GUIDE.md` (local GPU, RTX 3090) or
 `docs/guides/BALL_TEMPORAL_KAGGLE_GUIDE.md` (Kaggle 2×T4). The v1 scripts are still in
@@ -279,13 +280,15 @@ Gate 3 also reports specialist recall per gap since the last sighting, which set
 | 2 | `build_ball_temporal_dataset.py` | local smoke test, then Kaggle | spot-check by eye; hard-frame count recorded. **Done 2026-10-13** (`scripts/ball_temporal/build_ball_temporal_dataset.py`, local); see the 2026-10-13 step 2 entry in `docs/path_b/PERF_LOG.md` |
 | 3 | heatmap model + training script | local smoke test, then Kaggle DDP | first run trained, curves saved. **Done 2026-10-15** (local, single RTX 3090): `runs/ball_temporal/c9b`, `c5b`; see the 2026-10-15 entry in `docs/path_b/PERF_LOG.md` |
 | 4 | evaluator support for point models in `crops` and `fuse`; 5-ch vs 9-ch | Kaggle | gates 1–3 in a dated `PERF_LOG.md` entry. **Measured 2026-10-15** (local, `scripts/eval/ball_det/eval_ball_temporal.py`): gate 1 pass; gate 3 pass for `c9b`, `c5b` short by 0.8 points under the `select` threshold rule; see `PERF_LOG.md` |
-| 4b | `select`-only system threshold rule, re-run gate 3 for `c5b` (a second look, §10 item 14) | local | gate 3 re-reported |
-| 5 | export, parity, runtime contract change to points | Kaggle or local 3090 | gate 4 passes |
+| 4b | `select`-only system threshold rule, re-run gate 3 for `c5b` (a second look, §10 item 14) | local | gate 3 re-reported. **Done 2026-10-15**: the new rule also picks 0.75; gate 3 still fails by 0.8 points (+9.2 recall, +1.2 precision); see `PERF_LOG.md` |
+| 4c | retrain `c5c`: GSR `test` sequences added to `pool` (§10 item 15), motion blur (item 16); gates re-run with the fixed `spec_precision` rule | local | gate 3 measured for `c5c`. **Done 2026-10-16:** gate 3 **PASS** (+10.1 recall, +1.2 precision, threshold 0.70 from `select`); see `PERF_LOG.md` |
+| 5 | export, parity, runtime contract change to points | Kaggle or local 3090 | gate 4 passes. **Partly done 2026-10-15:** `scripts/ball_temporal/export_ball_specialist.py` (ONNX + sidecar, parity vs PyTorch on ORT CPU: PASS, max point diff 0.0000 px); the pipeline builds missing TensorRT engines at startup (`trt_runner.ensure_engine`). TensorRT timing deferred (§10 item 17) |
 | 6 | `BallTracker` + pytest; `track` evaluator stage | local | gate 5 measured |
 
 **Deferred** (user, 2026-10-12; revisit after step 4): copy-paste of balls, motion-blur
 augmentation, and more distinct clips (moving most of the 43 non-test val sequences into
-training).
+training). *Revisited 2026-10-15:* more clips came from GSR `test` instead (item 15), so `select`
+and `test` stay intact; motion blur is in (item 16); copy-paste is still deferred.
 
 ---
 
@@ -318,4 +321,19 @@ training).
 14. **Gate 3 threshold rule to be replaced** (2026-10-15). "Precision ≥ main's on `select`"
     picked 0.75 for `c5b` because main's precision is 88.3% on `select` but 85.3% on `test`.
     The new rule is set on `select` only; because test results prompted the change, its re-run
-    is reported as a second look.
+    is reported as a second look. *Outcome (step 4b):* rule "lowest `select` threshold with >= 90%
+    of specialist outputs on the labelled ball" also gives 0.75, so gate 3 stays at FAIL by 0.8
+    points. Not re-tuned further.
+15. **GSR `test` joins `pool`** (2026-10-15). Its 49 sequences are fully labelled and the main
+    detector never trained on them (it trained on GSR `train`, validated on `valid`), so their
+    misses are real hard examples. `pool` grows from 33 to 82 sequences and hard positives from
+    7,563 to 14,432. `select` and `test` are unchanged. (`gsr_io.py` maps the folder to
+    `gsrtest`; it is unrelated to our held-out `test`.)
+16. **Motion-blur augmentation** (2026-10-15): `--motion_blur p`, same linear blur on all three
+    frames. Off by default so `c5b` reproduces.
+17. **Step 5 without TensorRT timing** (user, 2026-10-15): export and parity now; engines are
+    built by the pipeline itself on first launch or when missing, not by hand. Gate 4 timing
+    waits until the engines are wanted.
+18. **`c5c` replaces `c5b`** (user, 2026-10-16). Same network, trained with the 49 extra clips and
+    motion blur; gate 3 passes (+10.1 / +1.2 at threshold 0.70 from the fixed `spec_precision`
+    rule). Exported: `runs/ball_temporal/c5c/ball_specialist_c5c.onnx`, parity checked.

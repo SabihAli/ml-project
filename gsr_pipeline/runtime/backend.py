@@ -5,7 +5,9 @@ IMPLEMENTATION_PLAN.md section 3.1. Tiers are tried in priority order and every 
 is logged with its reason, so a host that silently ends up in degraded mode can be
 diagnosed from the log alone rather than from a stopwatch:
 
-    1. TensorRT FP16    -- tensorrt importable, CUDA present, sidecar matches, warm-up OK
+    1. TensorRT FP16    -- tensorrt importable, CUDA present, sidecar matches, warm-up OK.
+                           A missing engine is built on the spot (first launch on a host)
+                           unless auto_build is off; see trt_runner.ensure_engine.
     2. ONNX Runtime GPU -- CUDAExecutionProvider available AND actually active
     3. ONNX Runtime CPU -- always; degraded mode, not real-time
 
@@ -167,6 +169,7 @@ def select_backend(
     artifact: ModelArtifact,
     prefer: Backend | None = None,
     device: str = "cuda:0",
+    auto_build: bool = True,
 ) -> BackendSelection:
     """Try each tier in priority order and return the first that loads and warms up.
 
@@ -176,7 +179,7 @@ def select_backend(
     is exactly the confusion this module exists to prevent.
     """
     from .ort_runner import OrtRunner
-    from .trt_runner import SidecarMismatch, TrtRunner, check_sidecar
+    from .trt_runner import SidecarMismatch, TrtRunner, check_sidecar, ensure_engine
 
     cuda_available = torch.cuda.is_available()
     tiers = (prefer,) if prefer is not None else TIER_ORDER
@@ -187,11 +190,8 @@ def select_backend(
             if tier is Backend.TENSORRT:
                 if not cuda_available:
                     raise RuntimeError("no CUDA device")
-                if not artifact.engine_path.exists():
-                    raise RuntimeError(
-                        f"no engine at {artifact.engine_path.name}; "
-                        "run scripts/build_trt_engine.py on this host"
-                    )
+                ensure_engine(artifact.onnx_path, artifact.engine_path, artifact.onnx_sha256,
+                              auto_build=auto_build)
                 check_sidecar(artifact.engine_path, artifact.onnx_sha256)
                 dev = torch.device(device)
                 runner = TrtRunner(artifact.engine_path, device=device)

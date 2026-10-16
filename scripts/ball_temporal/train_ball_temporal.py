@@ -13,7 +13,9 @@ numpy, opencv-python, matplotlib.
     (hard pool positives x3). One epoch = sum(repeat) samples.
   * Augmentation (plan §5): horizontal flip; the same brightness/contrast/colour gain on all three
     frames (on the GPU); a small translation (+-16 px, exposed border filled grey); and in 5% of samples
-    t-1 and t-2 replaced by t (sequence start or a cut, plan §4).
+    t-1 and t-2 replaced by t (sequence start or a cut, plan §4). Optional (--motion_blur p, added
+    2026-10-15, off by default so earlier runs reproduce): in a share p of samples, the same linear
+    motion blur (3-9 px, random direction) on all three frames, like a fast pan or a fast ball.
   * Validation on `select` every epoch. Distance recall = peak within 15 px of a ball (plan §8),
     over positive crops. The selection score is its mean over the thresholds at which 1%, 2%, ...,
     10% of empty crops (`neg_hard`, `neg_random`) fire: a partial recall-vs-FPR area. Recall at a
@@ -68,9 +70,21 @@ def parse_balls(s: str) -> np.ndarray:
     return np.array(pts, np.float32).reshape(-1, 3)
 
 
+def motion_blur(frames: np.ndarray, rng) -> np.ndarray:
+    """The same linear blur kernel (length 3-9 px, random angle) on each frame (3, H, W, 3)."""
+    k = int(rng.integers(3, 10))
+    kernel = np.zeros((k, k), np.float32)
+    kernel[k // 2] = 1.0
+    rot = cv2.getRotationMatrix2D(((k - 1) / 2, (k - 1) / 2), float(rng.uniform(0, 180)), 1.0)
+    kernel = cv2.warpAffine(kernel, rot, (k, k))
+    kernel /= max(kernel.sum(), 1e-6)
+    return np.stack([cv2.filter2D(f, -1, kernel) for f in frames])
+
+
 class TemporalCrops(Dataset):
-    def __init__(self, data: Path, rows: list[dict], augment: bool, seed: int = 0):
+    def __init__(self, data: Path, rows: list[dict], augment: bool, seed: int = 0, blur_p: float = 0.0):
         self.data, self.rows, self.augment, self.seed = data, rows, augment, seed
+        self.blur_p = blur_p
 
     def __len__(self):
         return len(self.rows)
@@ -84,7 +98,10 @@ class TemporalCrops(Dataset):
         frames = np.stack([img[:, k * CROP:(k + 1) * CROP] for k in range(3)])   # (3, H, W, 3)
         pts = parse_balls(r["balls"])
         if self.augment:
-            frames, pts = self._augment(frames, pts, np.random.default_rng())
+            rng = np.random.default_rng()
+            frames, pts = self._augment(frames, pts, rng)
+            if self.blur_p and rng.random() < self.blur_p:
+                frames = motion_blur(np.ascontiguousarray(frames), rng)
         out = np.full((MAX_BALLS, 3), -1, np.float32)
         out[:len(pts)] = pts[:MAX_BALLS]
         x = torch.from_numpy(np.ascontiguousarray(frames.transpose(0, 3, 1, 2).reshape(9, CROP, CROP)))
@@ -208,6 +225,7 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="smoke tests: samples per epoch and per validation")
     ap.add_argument("--resume", action="store_true", help="continue from <out>/last.pt")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--motion_blur", type=float, default=0.0, help="share of training samples given motion blur")
     a = ap.parse_args()
 
     torch.manual_seed(a.seed)
@@ -224,7 +242,7 @@ def main():
     weights = torch.tensor([float(r["repeat"]) for r in tr_rows])
     n_epoch = a.limit or int(weights.sum())
     sampler = WeightedRandomSampler(weights, n_epoch, replacement=True)
-    tr = DataLoader(TemporalCrops(a.data, tr_rows, True), a.batch, sampler=sampler, num_workers=a.workers,
+    tr = DataLoader(TemporalCrops(a.data, tr_rows, True, blur_p=a.motion_blur), a.batch, sampler=sampler, num_workers=a.workers,
                     pin_memory=True, drop_last=True, persistent_workers=a.workers > 0)
     va = DataLoader(TemporalCrops(a.data, va_rows, False), a.batch, shuffle=False, num_workers=a.workers,
                     pin_memory=True, persistent_workers=a.workers > 0)

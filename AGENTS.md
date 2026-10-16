@@ -57,7 +57,7 @@ cv_service/
 │   │   ├── GSR_PIPELINE.md           # How the pipeline works, the metric, results (was IMPLEMENTATION.md)
 │   │   ├── PIPELINE_EVOLUTION.md     # Event taxonomy, revision semantics, open issues
 │   │   ├── STREAMING_ARCHITECTURE.md # Live path (Path A) design + build status (§8)
-│   │   ├── BALL_TEMPORAL_ARCH.md     # Temporal ball specialist (c5b): model, training, results
+│   │   ├── BALL_TEMPORAL_ARCH.md     # Temporal ball specialist (c5c): model, training history, state
 │   │   └── REQUIREMENTS.md
 │   ├── path_b/                # Path B (2-class detector) work
 │   │   ├── plans/IMPLEMENTATION_PLAN.md  # Path B plan, per-phase status in §12.1
@@ -251,7 +251,8 @@ python -m gsr_pipeline.validate_live_broadcast
 python scripts/export_athlete_detector.py                    # 736x1280, rectangular
 python scripts/export_athlete_detector.py --imgsz 1280 1280  # square, for the A/B
 
-# Build the TensorRT engine (first install, on the production GPU host; exits 2 without CUDA)
+# Build the TensorRT engine ahead of time (optional since 2026-10-15: the pipeline builds a
+# missing engine itself at startup, see detector_b/calibration.auto_build_engine; exits 2 without CUDA)
 python scripts/build_trt_engine.py
 
 # Parity gate: runner vs Ultralytics, box for box, 5 sequences, both input sizes
@@ -284,7 +285,7 @@ Observed, not prescribed elsewhere in the repo:
 **A `pytest` suite exists as of 2026-09-26 (Path B Phase 1a)** — approved by the user on 2026-09-25, `docs/path_b/plans/IMPLEMENTATION_PLAN.md` §12. It is deliberately narrow:
 
 ```bash
-python -m pytest tests/ -q        # 51 tests, ~60s, no weights / no GPU / no data
+python -m pytest tests/ -q        # 59 tests, ~20s, no weights / no GPU / no data
 ```
 
 `tests/` covers **pure logic only**: backend tier selection with fake backends, artifact/sidecar contract refusals, letterbox geometry, NMS + box-decode post-processing (`test_backend_selection.py`, `test_postprocess.py`), `LiveCalibrator` triggers, propagation and the NBJW-storm cooldown (`test_calibration_live.py`), fast NBJW decode vs the vendored reference (`test_nbjw_fast_decode.py`), and ByteTrack stepping on empty frames (`test_track.py`). Anything needing weights, a GPU or a dataset stays in `validate_*.py` / `evaluate_*.py`, outside pytest's default run — that split is intentional, so the suite stays runnable anywhere in seconds.
@@ -300,6 +301,7 @@ So "tests pass" means the Path B runtime's logic passes — it is not evidence t
 - **`gsr_pipeline/configs/default.yaml`** is the sole runtime config file, covering `detector`, `reid`, `tracker`, `calibration`, `jersey`, `team`, `refiner`, `output`, `possession`, `pitch_view_gate`, `team_live`, and `reid_worker_pool` sections. `run.py --device` overrides device settings across `detector`/`reid`/`calibration`/`jersey` sections at runtime. `possession`, `pitch_view_gate`, and `team_live` hold tunables for their respective modules — no values are hardcoded in the modules themselves, per repo convention. `team_live` in particular carries several explicitly provisional numeric defaults (`confidence_threshold`, `bootstrap_window_s`, etc.) that need tuning against real broadcast footage, which doesn't exist in this repo yet — see the config file's inline comments.
 - **Environment variables**: `CV_SERVICE_API_KEY`, required by the `api/` service (it fails closed without it). `gsr_pipeline` itself reads none. Downloading the GSR splits needs no SoccerNet password (`docs/guides/BALL_TEMPORAL_GUIDE.md` §3).
 - **Model weights**: `yolov8n_gsr.pt` (committed, repo root) and calibration checkpoints under `data/pretrained_models/calibration/` (gitignored, auto-downloaded on first run).
+- **TensorRT engines** (`<onnx stem>_fp16.engine` beside each ONNX, with a `.json` sidecar): built automatically at startup when missing, controlled by `detector_b.auto_build_engine` and `calibration.auto_build_engine` (default true; `gsr_pipeline/runtime/trt_runner.ensure_engine`). Needs CUDA and the `tensorrt` package; the first build takes minutes. An engine that exists but was built for another GPU/TRT version is refused (fallback to ORT GPU), never rebuilt automatically.
 - No secrets, API keys, or credentials are present in tracked files.
 
 ## Architecture Rules
@@ -365,7 +367,7 @@ When a change alters any of the following, update the corresponding documentatio
 - **`data/datasets/SoccerNetGS/gamestate-2024/valid/SNGS-021`**: the "Run Inference" example command in README/AGENTS.md references this path, but no dataset is tracked in this repo (see `.gitignore`) — the `valid/` split must be downloaded first (`docs/guides/BALL_TEMPORAL_GUIDE.md` §3) before that exact example command will work.
 - **Batch-only architecture vs. the service's real-time goal**: tracklet aggregation, batch team classification, and refinement still require the full sequence. The live path sidesteps them rather than making them incremental: `process_stream` skips them, and `LiveTeamAssigner` replaces batch team classification. Live `POSSESSION`/`TURNOVER` remain unbuilt because `possession.py` still runs only over a completed sequence.
 - **Relationship to the rest of the BallKnowledge monorepo**: resolved and built. cv-service is consumed over its HTTP + WS API by `CVPipelineSource`, which lives in `data_ingestion` (a separate git repository from this one, `github.com/SabihAli/ml-project`) and publishes through `data_ingestion`'s Kafka layer. A change to this repo's WS message shape (`api/event_serializer.py`) or detector classes must be matched in that file.
-- **Ball detection is the weakest input to every ball-based event**: on `SNGS-021`, `evaluate_detection.py` measures 52.4% ball recall with gaps up to 6.7s (players 95.4%, referees 84.6%). See `docs/architecture/PIPELINE_EVOLUTION.md` §6 and §7.1 before building live possession or any classifier-tier event. On the 15 held-out test sequences the Path B detector finds 59.4% of balls; the temporal specialist `c5b` (`docs/architecture/BALL_TEMPORAL_ARCH.md`) raises that to 68.6% with precision up 1.2 points in simulation, but is not yet exported or wired into the pipeline.
+- **Ball detection is the weakest input to every ball-based event**: on `SNGS-021`, `evaluate_detection.py` measures 52.4% ball recall with gaps up to 6.7s (players 95.4%, referees 84.6%). See `docs/architecture/PIPELINE_EVOLUTION.md` §6 and §7.1 before building live possession or any classifier-tier event. On the 15 held-out test sequences the Path B detector finds 59.4% of balls; the temporal specialist `c5c` (`docs/architecture/BALL_TEMPORAL_ARCH.md`) raises that to 69.5% with precision up 1.2 points in simulation, but is not yet exported or wired into the pipeline.
 
 ### Resolved since initial documentation
 

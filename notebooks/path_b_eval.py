@@ -271,6 +271,7 @@ def load_models(args, cfg, need_pipeline: bool):
         athlete_conf=args.athlete_conf if args.athlete_conf is not None else det_cfg["athlete_conf"],
         ball_conf=args.ball_conf if args.ball_conf is not None else det_cfg["ball_conf"],
         device=args.device, backend=args.backend,
+        auto_build_engine=det_cfg.get("auto_build_engine", True),
     )
     models = {"detector": detector, "kp_detector": None, "jersey": None}
     if need_pipeline:
@@ -282,7 +283,8 @@ def load_models(args, cfg, need_pipeline: bool):
             checkpoint_kp=calib["checkpoint_kp"], checkpoint_l=calib["checkpoint_l"],
             device=calib_device, backend=args.calib_backend or calib.get("backend", "torch"),
             onnx_kp=calib.get("onnx_kp"), onnx_l=calib.get("onnx_l"),
-            fp16=calib.get("fp16", False), fast_decode=calib.get("fast_decode", True))
+            fp16=calib.get("fp16", False), fast_decode=calib.get("fast_decode", True),
+            auto_build_engine=calib.get("auto_build_engine", True))
         if args.jersey:
             from gsr_pipeline.jersey import EasyOCRJerseyDetector
 

@@ -7,8 +7,8 @@ Standalone (numpy, opencv-python only), so the scripts in this folder run on Kag
 Splits, by sequence (decision A, 2026-10-12):
   train   all GSR `train` sequences. The main detector was trained on them, so their frames give
           easy positives and negatives only, never hard examples.
-  pool    `valid` sequences outside test and select. The main detector never trained on them:
-          the source of hard examples.
+  pool    `valid` sequences outside test and select, plus every GSR `test` sequence (added
+          2026-10-15). The main detector never trained on either: the source of hard examples.
   select  10 `valid` sequences, evenly spaced through the non-test ones: model selection and
           early stopping.
   test    the 15 held-out `valid` sequences: final gates only.
@@ -35,7 +35,7 @@ PERSON_CATS = frozenset({1, 2, 3, 7})
 @dataclass(frozen=True)
 class SeqRef:
     name: str          # SNGS-060
-    src_split: str     # train | valid (the GSR folder it came from)
+    src_split: str     # train | valid | gsrtest (the GSR folder it came from)
     kind: str          # dir | zip
     container: str     # sequence dir, or zip path
     prefix: str        # inside-zip prefix of the sequence folder ("" for dir)
@@ -52,6 +52,8 @@ def _gsr_split_of(parts) -> str | None:
         return "train"
     if any("valid" in p for p in low):
         return "valid"
+    if any(p == "test" or p.startswith("test.") for p in low):
+        return "gsrtest"            # the GSR test split; not our held-out `test` (valid sequences)
     return None
 
 
@@ -87,6 +89,8 @@ def discover(src: Path) -> list[SeqRef]:
     def split_of(r: SeqRef) -> str:
         if r.src_split == "train":
             return "train"
+        if r.src_split == "gsrtest":
+            return "pool"
         return "test" if r.number in TEST_SEQS else "select" if r.number in sel else "pool"
 
     refs = [SeqRef(r.name, r.src_split, r.kind, r.container, r.prefix, split_of(r)) for r in found.values()]

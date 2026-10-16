@@ -23,8 +23,12 @@ System simulation, per sequence, frame by frame (implementation plan §5.1, temp
 Scoring: 15 px centre match. recall = hit frames / ball-labelled frames. precision = hits / outputs
 on ball-labelled frames (outputs on frames without a ball label are counted separately: those
 frames may show an unlabelled ball). Longest miss = longest run of ball-labelled frames not hit.
-Threshold: on `select`, the highest recall whose precision is >= the main detector's own on
-`select`; then frozen for `test`.
+Threshold (--rule, chosen on `select`, frozen for `test`):
+  spec_precision (default, 2026-10-15): the lowest threshold at which >= --spec_precision of the
+    specialist's own outputs on ball-labelled frames are on the labelled ball. Independent of the
+    main detector's precision, which differs between splits (88.3% select, 85.3% test).
+  main_precision (the first rule): the highest recall whose system precision is >= the main
+    detector's own on `select`.
 
     python scripts/eval/ball_det/eval_ball_temporal.py all --ckpt runs/ball_temporal/c5b/best.pt \
         --src data/datasets/SoccerNetGS --out data/outputs/ball_temporal/eval/c5b
@@ -255,6 +259,9 @@ def main():
     ap.add_argument("--main_conf", type=float, default=0.15, help="main-detector output threshold")
     ap.add_argument("--max_miss", type=int, default=15, help="frames since the last sighting the specialist still runs")
     ap.add_argument("--chain", choices=["fused", "main"], default="fused")
+    ap.add_argument("--rule", choices=["spec_precision", "main_precision"], default="spec_precision")
+    ap.add_argument("--spec_precision", type=float, default=0.90,
+                    help="spec_precision rule: required share of specialist outputs on the labelled ball")
     ap.add_argument("--crop_fpr", type=float, default=0.05, help="gates 1-2 threshold: this share of select negatives fire")
     ap.add_argument("--test_sweep", action="store_true",
                     help="also report the test curve at every threshold: a diagnostic, never for choosing")
@@ -277,8 +284,15 @@ def main():
     # gate 3
     spec = Specialist(model, channels, dev)
     sel_base, sel = run_system("select", spec, a, THRESHOLDS)
-    ok = [t for t, r in sel.items() if r["precision"] >= sel_base["precision"]]
-    thr = max(ok, key=lambda t: sel[t]["recall"]) if ok else max(sel, key=lambda t: sel[t]["precision"])
+    if a.rule == "spec_precision":
+        ok = [t for t, r in sel.items() if r["spec_precision"] >= a.spec_precision]
+        thr = min(ok) if ok else max(sel)
+        rule_text = (f"the lowest `select` threshold at which >= {a.spec_precision:.0%} of the specialist's "
+                     f"outputs are on the labelled ball")
+    else:
+        ok = [t for t, r in sel.items() if r["precision"] >= sel_base["precision"]]
+        thr = max(ok, key=lambda t: sel[t]["recall"]) if ok else max(sel, key=lambda t: sel[t]["precision"])
+        rule_text = f"the highest `select` recall with precision >= the main detector's on `select` ({sel_base['precision']:.2%})"
     print(f"system threshold {thr:.2f} (select: recall {sel[thr]['recall']:.2%}, precision "
           f"{sel[thr]['precision']:.2%}; main alone {sel_base['recall']:.2%} / {sel_base['precision']:.2%})", flush=True)
     spec.calls, spec.ms = 0, 0.0
@@ -301,8 +315,7 @@ def main():
     L += ["", f"Gate 1 (specialist beats main on all test crops): **{'PASS' if g1 else 'FAIL'}**. "
               f"Gate 2 (hard crops): reported above.", "",
           f"## Gate 3: system, every test frame (chain `{a.chain}`, max_miss {a.max_miss})", "",
-          f"System threshold {thr:.2f}: the highest `select` recall with precision >= the main "
-          f"detector's on `select` ({pct(sel_base['precision'])}).", "",
+          f"System threshold {thr:.2f} (rule `{a.rule}`): {rule_text}.", "",
           "| | recall | precision | outputs on unlabelled frames | longest miss mean / max |", "|---|---|---|---|---|",
           f"| main detector | {pct(test_base['recall'])} | {pct(test_base['precision'])} | {test_base['outputs_unlabelled']} | "
           f"{test_base['longest_miss_mean_s']:.1f} s / {test_base['longest_miss_max_s']:.1f} s |",
@@ -317,9 +330,9 @@ def main():
     for k, (r, n) in t["by_gap"].items():
         L.append(f"| {k} | {n} | {pct(r)} |")
     L += ["", f"`select` sweep (main alone: recall {pct(sel_base['recall'])}, precision {pct(sel_base['precision'])}):", "",
-          "| threshold | recall | precision |", "|---|---|---|"]
+          "| threshold | recall | precision | specialist outputs on the ball |", "|---|---|---|---|"]
     for k, r in sel.items():
-        L.append(f"| {k:.2f} | {pct(r['recall'])} | {pct(r['precision'])} |")
+        L.append(f"| {k:.2f} | {pct(r['recall'])} | {pct(r['precision'])} | {pct(r['spec_precision'])} |")
     if a.test_sweep:
         L += ["", "`test` sweep, **diagnostic only** (the gate uses the `select` threshold above):", "",
               "| threshold | recall | precision |", "|---|---|---|"]
@@ -332,6 +345,7 @@ def main():
     (a.out / "report.md").write_text(text + "\n", encoding="utf-8")
     (a.out / "results.json").write_text(json.dumps(
         {"ckpt": str(a.ckpt), "epoch": epoch, "channels": channels, "chain": a.chain, "max_miss": a.max_miss,
+         "rule": a.rule, "spec_precision_target": a.spec_precision,
          "crop_thr": crop_thr, "crops": crops, "system_thr": thr, "select_main": sel_base, "select": sel,
          "test_main": test_base, "test": t, "ms_per_call": ms, "gate1": g1, "gate3": g3}, indent=1, default=str))
     with open(a.out / "test_crops.csv", "w", newline="") as f:

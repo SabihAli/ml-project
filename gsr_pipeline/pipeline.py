@@ -61,6 +61,7 @@ class GSRPipeline:
             onnx_l=calib_cfg.get("onnx_l"),
             fp16=calib_cfg.get("fp16", False),
             fast_decode=calib_cfg.get("fast_decode", True),
+            auto_build_engine=calib_cfg.get("auto_build_engine", True),
         )
         self._calib_cfg = calib_cfg
         self.calibrator = self._new_calibrator()

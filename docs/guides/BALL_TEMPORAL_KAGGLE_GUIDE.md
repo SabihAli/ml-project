@@ -70,7 +70,7 @@ Expect:
 | split | sequences |
 |---|---|
 | `train` | 57 |
-| `pool` | 33 |
+| `pool` | 33 (82 if the dataset also holds the GSR `test` split, as the local run does since 2026-10-15) |
 | `select` | 10 |
 | `test` | 15: 021 022 023 026 030 033 036 040 044 047 050 054 080 086 090 |
 
@@ -122,7 +122,7 @@ Check that everything is there:
 !for s in train pool select test; do echo "$s $(ls /kaggle/working/main_cache/$s 2>/dev/null | grep -c '\.json$')"; done
 ```
 
-Expect `train 57`, `pool 33`, `select 10`, `test 15`.
+Expect `train 57`, `pool 33` (or 82 with GSR `test`), `select 10`, `test 15`.
 
 ---
 
