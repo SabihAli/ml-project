@@ -49,6 +49,7 @@ import torch
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "scripts" / "ball_temporal"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_ball_temporal_dataset import CROP, clamp_window  # noqa: E402
 from gsr_io import SeqReader, decode, discover, parse_labels  # noqa: E402
 from heatmap_model import BallHeatmapNet, build_input, decode as decode_hm  # noqa: E402
@@ -250,7 +251,9 @@ def pct(v):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("stage", choices=["all"])
+    ap.add_argument("stage", choices=["all", "track"],
+                    help="all: gates 1-3 (this file). track: ball tracker + window variants "
+                         "(ball_system.py, docs/plans/BALL_IMPROVEMENT_PLAN.md items 2-3)")
     ap.add_argument("--ckpt", type=Path, required=True)
     ap.add_argument("--src", type=Path, default=Path("data/datasets/SoccerNetGS"))
     ap.add_argument("--cache", type=Path, default=Path("data/outputs/ball_temporal/main_cache"))
@@ -267,12 +270,22 @@ def main():
                     help="also report the test curve at every threshold: a diagnostic, never for choosing")
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--motion", type=Path, default=None, help="track: camera_motion_cache.py output (none = no motion)")
+    ap.add_argument("--system_thr", type=float, default=0.70,
+                    help="track: the as-wired specialist threshold for the baseline (c5c's sidecar: 0.70)")
+    ap.add_argument("--search_passes", type=int, default=2, help="track: coordinate-search passes over the tracker knobs")
+    ap.add_argument("--max_seqs", type=int, default=0, help="track: first N sequences per split (smoke tests)")
     a = ap.parse_args()
     dev = torch.device(a.device)
     torch.backends.cudnn.benchmark = True
     a.out.mkdir(parents=True, exist_ok=True)
     model, channels, epoch = load_model(a.ckpt, dev)
     print(f"{a.ckpt} (epoch {epoch}, {channels} channels), chain {a.chain}, max_miss {a.max_miss}", flush=True)
+    if a.stage == "track":
+        from ball_system import stage_track
+        a.chain = "fused"
+        stage_track(a, model, channels, dev)
+        return
 
     # gates 1-2
     sel_rows = crop_scores(model, channels, a.data, "select", dev, a.workers)

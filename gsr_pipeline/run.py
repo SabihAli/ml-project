@@ -44,6 +44,7 @@ def main():
         
     if args.device:
         cfg["detector"]["device"] = args.device
+        cfg.setdefault("ball_specialist", {})["device"] = args.device
         cfg["reid"]["device"] = args.device
         cfg["calibration"]["device"] = args.device
         # EasyOCR uses a boolean flag

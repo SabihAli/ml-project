@@ -265,7 +265,7 @@ def load_models(args, cfg, need_pipeline: bool):
     import torch
     from gsr_pipeline.detect_athlete import AthleteBallDetector
 
-    det_cfg = cfg["detector_b"]
+    det_cfg = cfg["detector"]
     detector = AthleteBallDetector(
         onnx_path=args.onnx or det_cfg["onnx_path"],
         athlete_conf=args.athlete_conf if args.athlete_conf is not None else det_cfg["athlete_conf"],
@@ -892,7 +892,7 @@ def parse_args():
     p.add_argument("--max_frames", type=int, default=None, help="cap frames per sequence (smoke tests)")
     p.add_argument("--stages", nargs="*", default=list(STAGES), choices=STAGES)
     p.add_argument("--config", default="gsr_pipeline/configs/default.yaml")
-    p.add_argument("--onnx", default=None, help="default: detector_b.onnx_path from the config")
+    p.add_argument("--onnx", default=None, help="default: detector.onnx_path from the config")
     p.add_argument("--weights", default="runs/yolo26s_athlete_ball/best.pt")
     p.add_argument("--backend", default=None, choices=["tensorrt", "ort_gpu", "ort_cpu"],
                    help="pin a detector tier; default walks the fallback chain")

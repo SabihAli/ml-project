@@ -25,7 +25,7 @@ missing should be skipped by the caller.
 
 Known limits: a keeper or referee kit close to a team kit is absorbed by that team; `other`
 is position-only (on-pitch staff are not caught); `team_a` / `team_b` are arbitrary names
-fixed at fit time (a = the kit that defended the lower-x end then).
+fixed at fit time (a = the kit that defecurnded the lower-x end then).
 """
 
 from __future__ import annotations

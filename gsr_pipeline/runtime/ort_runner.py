@@ -138,5 +138,33 @@ class OrtRunner:
         binding.synchronize_outputs()
         return out
 
+    def infer_all(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Run one forward pass and return every output by name, for models with more than
+        one head (the ball specialist: heatmap + offset). Same transfer rules as `infer`."""
+        if not self.uses_cuda:
+            outs = self.session.run(
+                None, {self.input_name: np.ascontiguousarray(x.detach().cpu().numpy(), dtype=np.float32)}
+            )
+            return {o.name: torch.from_numpy(v) for o, v in zip(self.session.get_outputs(), outs)}
+
+        if not hasattr(self, "_all_buffers"):
+            self._all_buffers = {
+                o.name: torch.empty(tuple(d if isinstance(d, int) else 1 for d in o.shape),
+                                    dtype=torch.float32, device=self.device)
+                for o in self.session.get_outputs()
+            }
+        x = x.to(self.device, dtype=torch.float32).contiguous()
+        binding = self.session.io_binding()
+        device_id = self.device.index or 0
+        binding.bind_input(name=self.input_name, device_type="cuda", device_id=device_id,
+                           element_type=np.float32, shape=tuple(x.shape), buffer_ptr=x.data_ptr())
+        for name, buf in self._all_buffers.items():
+            binding.bind_output(name=name, device_type="cuda", device_id=device_id,
+                                element_type=np.float32, shape=tuple(buf.shape), buffer_ptr=buf.data_ptr())
+        torch.cuda.current_stream(self.device).synchronize()     # see _infer_bound
+        self.session.run_with_iobinding(binding)
+        binding.synchronize_outputs()
+        return self._all_buffers
+
     def close(self) -> None:
         self.session = None

@@ -5,14 +5,12 @@ for a live broadcast source, per docs/architecture/STREAMING_ARCHITECTURE.md §8
 step 4). Same style/rationale as the other validate_*.py scripts: not a test
 framework, prints PASS/FAIL per check, exits non-zero on failure.
 
-This is the first script that runs the REAL model stack (detector, ReID,
-calibration, jersey OCR) through process_stream rather than synthetic data --
-expect it to be slow on CPU (tens of seconds per frame). Keep --max_frames
-small.
+Runs the real model stack (athlete/ball detector, c5c ball specialist, calibration, live
+roles, jersey OCR) through process_stream. Slow on CPU; keep --max_frames small.
+--fit_frames lowers live_roles.fit_frames so a short run still reaches the role fit.
 
-Usage (from the project's own venv, e.g. .gsr_venv, which has torchreid/
-easyocr installed):
-    python -m gsr_pipeline.validate_process_stream --mp4 data/outputs/SNGS-021_eval75/annotated.mp4 --max_frames 3
+Usage (from the project's own venv, e.g. .gsr_venv, which has easyocr installed):
+    python -m gsr_pipeline.validate_process_stream --mp4 data/outputs/SNGS-021_eval75/annotated.mp4 --max_frames 30
 """
 
 from __future__ import annotations
@@ -23,13 +21,13 @@ import threading
 
 import yaml
 
-from gsr_pipeline.pipeline import GSRPipeline
 from gsr_pipeline.frame_source import VideoFileFrameSource
-from gsr_pipeline.pitch_view_gate import PitchViewGate
-from gsr_pipeline.team_live import LiveTeamAssigner
+from gsr_pipeline.pipeline import BALL_TRACK_ID, GSRPipeline
 from gsr_pipeline.reid_worker_pool import ReidWorkerPool
 
 results = []
+
+ROLES = {"player", "goalkeeper", "referee", "other", "ball"}
 
 
 def check(name: str, condition: bool, detail: str = "") -> None:
@@ -41,7 +39,8 @@ def check(name: str, condition: bool, detail: str = "") -> None:
 def main():
     parser = argparse.ArgumentParser(description="Validate GSRPipeline.process_stream end-to-end")
     parser.add_argument("--mp4", required=True, help="A real video file to stream, e.g. an annotated.mp4 from a prior run")
-    parser.add_argument("--max_frames", type=int, default=3)
+    parser.add_argument("--max_frames", type=int, default=30)
+    parser.add_argument("--fit_frames", type=int, default=10, help="live_roles.fit_frames for this run")
     parser.add_argument("--config", default="gsr_pipeline/configs/default.yaml")
     parser.add_argument("--device", default="cpu")
     args = parser.parse_args()
@@ -49,17 +48,16 @@ def main():
     with open(args.config, "r") as f:
         cfg = yaml.safe_load(f)
     cfg["detector"]["device"] = args.device
-    cfg["reid"]["device"] = args.device
+    cfg["ball_specialist"]["device"] = args.device
     cfg["calibration"]["device"] = args.device
     cfg["jersey"]["gpu"] = "cuda" in args.device
+    cfg.setdefault("live_roles", {})["fit_frames"] = args.fit_frames
 
     print(f"Initializing GSRPipeline (device={args.device})...")
     pipeline = GSRPipeline(cfg)
 
     frame_source = _MaxFramesVideoFileFrameSource(args.mp4, args.max_frames)
-    gate = PitchViewGate(cfg.get("pitch_view_gate", {}))
-    assigner = LiveTeamAssigner(cfg.get("team_live", {}))
-    pool = ReidWorkerPool(pipeline.reid, pipeline.jersey, cfg.get("reid_worker_pool", {}))
+    pool = ReidWorkerPool(None, pipeline.jersey, cfg.get("reid_worker_pool", {}))
 
     events = []
     lock = threading.Lock()
@@ -69,25 +67,30 @@ def main():
             events.append(event)
 
     print(f"Running process_stream over {args.mp4} (max {args.max_frames} frames)...")
-    summary = pipeline.process_stream(
-        frame_source, on_frame_result,
-        pitch_view_gate=gate, live_team_assigner=assigner, reid_pool=pool,
-    )
+    summary = pipeline.process_stream(frame_source, on_frame_result, reid_pool=pool)
 
     fast_events = [e for e in events if e["type"] == "fast"]
     appearance_events = [e for e in events if e["type"] == "appearance"]
+    rows = [r for e in fast_events for _, r in e["detections"].iterrows()]
+    balls = [r for r in rows if r["role_detection"] == "ball"]
 
     check("process_stream completes without raising", True)
     check("frame_count matches the number of frames actually read", summary["frame_count"] == len(fast_events), f"frame_count={summary['frame_count']}, fast_events={len(fast_events)}")
     check("at least one fast (position/role) event was emitted", len(fast_events) > 0)
-    check("every fast event carries a non-empty detections DataFrame", all(not e["detections"].empty or True for e in fast_events))
-    check("at least one appearance (ReID/jersey) event was eventually delivered", len(appearance_events) > 0, f"{len(appearance_events)} appearance events")
+    check("every detection has a known role", all(r["role_detection"] in ROLES for r in rows),
+          f"roles seen: {sorted({r['role_detection'] for r in rows})}")
+    check("at most one ball per frame, under the ball track id",
+          all((e["detections"]["role_detection"] == "ball").sum() <= 1 for e in fast_events)
+          and all(int(r["track_id"]) == BALL_TRACK_ID for r in balls))
+    check("every ball says where it came from", all(r["ball_source"] in ("main", "specialist") for r in balls),
+          f"{len(balls)} balls, sources {dict((s, sum(r['ball_source'] == s for r in balls)) for s in ('main', 'specialist'))}")
+    check("ball stats are reported", set(summary["ball_stats"]) == {"main", "specialist_calls", "specialist_hits"},
+          str(summary["ball_stats"]))
+    check("roles were fitted within the run", summary["roles_fitted"])
+    check("fitted roles produce teams", any(r["team"] in ("left", "right") for r in rows))
+    check("at least one appearance (jersey) event was eventually delivered", len(appearance_events) > 0, f"{len(appearance_events)} appearance events")
     check(
-        "appearance events carry embeddings/color_features columns",
-        all("embeddings" in e["detections"].columns and "color_features" in e["detections"].columns for e in appearance_events) if appearance_events else False,
-    )
-    check(
-        "appearance events carry a team_results dict (possibly empty if bootstrap hasn't completed)",
+        "appearance events carry a team_results dict",
         all(isinstance(e["team_results"], dict) for e in appearance_events) if appearance_events else False,
     )
 

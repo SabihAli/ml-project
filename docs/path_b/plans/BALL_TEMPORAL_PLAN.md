@@ -4,9 +4,10 @@ Status (2026-10-16): **steps 1–5 of §9 done (step 5 without TensorRT timing);
 `c5c`** (§10 item 18). v1, a single-frame YOLO26s on 640×640 crops, was scratched (§1). Its
 replacement sees **three frames** (§4), predicts a **point** (§5) and trains on **hard examples**
 (§6). On the 15 test sequences, main detector + `c5c` raises ball recall from 59.4% to 69.5%
-(+10.1) and precision from 85.3% to 86.5%: gates 1 and 3 pass. Not wired into the pipeline
-(implementation plan Phase 6); the ball tracker (§7) is not built. Model write-up and history:
-`docs/architecture/BALL_TEMPORAL_ARCH.md`.
+(+10.1) and precision from 85.3% to 86.5%: gates 1 and 3 pass. **Wired into the pipeline
+2026-10-25**, batch and live (`gsr_pipeline/ball_specialist.py`, implementation plan Phase 6,
+partial): it runs inline after the main detector, not yet on its own CUDA stream. The ball
+tracker (§7) is not built. Model write-up and history: `docs/architecture/BALL_TEMPORAL_ARCH.md`.
 
 How to run it: `docs/guides/BALL_TEMPORAL_GUIDE.md` (local GPU, RTX 3090) or
 `docs/guides/BALL_TEMPORAL_KAGGLE_GUIDE.md` (Kaggle 2×T4). The v1 scripts are still in

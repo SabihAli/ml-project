@@ -4,9 +4,11 @@ to `on_frame_result` (which carry a pandas DataFrame of detections) into
 plain JSON-safe dicts for the WebSocket feed.
 
 Deliberately thin: no accumulation, no reshaping beyond picking the columns
-a consumer (data_ingestion's future CVPipelineSource) actually needs. Ball
-detections are included alongside player/goalkeeper/referee rows -- the
-consumer is responsible for interpreting `role`.
+a consumer (data_ingestion's CVPipelineSource) actually needs. Ball
+detections are included alongside player/goalkeeper/referee/other rows -- the
+consumer is responsible for interpreting `role`. "other" (off-pitch staff,
+gsr_pipeline/athlete_roles.py) is new with the athlete/ball detector;
+CVPipelineSource skips roles it does not map, with one warning.
 """
 
 from __future__ import annotations
@@ -41,6 +43,18 @@ def _detection_row_to_dict(row: pd.Series) -> Dict[str, Any]:
     }
 
 
+def _fast_row_to_dict(row: pd.Series) -> Dict[str, Any]:
+    """Fast rows also carry the live team (gsr_pipeline/live_roles.py: "left" | "right" | None,
+    a running vote) and, for the ball, where it came from (main detector or c5c specialist)."""
+    d = _detection_row_to_dict(row)
+    d["team"] = _clean(row.get("team"))
+    d["team_confidence"] = _clean(row.get("team_confidence"))
+    if d["role"] == "ball":
+        d["ball_source"] = _clean(row.get("ball_source"))
+        d["frames_since_seen"] = _clean(row.get("frames_since_seen"))
+    return d
+
+
 def serialize_fast_event(event: dict) -> dict:
     df = event["detections"]
     return {
@@ -48,7 +62,7 @@ def serialize_fast_event(event: dict) -> dict:
         "frame_idx": event["frame_idx"],
         "timestamp_s": event["timestamp_s"],
         "is_pitch_view": event["is_pitch_view"],
-        "detections": [_detection_row_to_dict(row) for _, row in df.iterrows()],
+        "detections": [_fast_row_to_dict(row) for _, row in df.iterrows()],
     }
 
 

@@ -3,7 +3,7 @@ evaluate_detection.py — per-class detector accuracy against SoccerNet-GSR labe
 
 GS-HOTA (evaluate.py) folds detection, association, localization and identity
 into one number, which hides how well each detector class performs on its own.
-This harness isolates the detector (yolov8n_gsr.pt, configs/default.yaml's
+This harness isolates the detector (the athlete/ball ONNX, configs/default.yaml's
 `detector` section) and reports:
 
   * per class (player / goalkeeper / referee / ball): recall, precision, F1,
@@ -36,12 +36,10 @@ from typing import Dict, List, Tuple
 
 import cv2
 import numpy as np
-import yaml
 from scipy.optimize import linear_sum_assignment
 
-from .detect import YOLOv8nDetector
-
-# Path A: the 4-class yolov8n_gsr detector, whose class_id IS the role.
+# The GT roles. Also the class list of the archived 4-class Path A detector
+# (archive/path_a/), which `evaluate(two_class=False)` still scores if handed one.
 CLASS_NAMES = {0: "player", 1: "goalkeeper", 2: "referee", 3: "ball"}
 PERSON_ROLES = ("player", "goalkeeper", "referee")
 
@@ -400,9 +398,10 @@ def main() -> None:
                              "(the kickoff is missed by every model and swamps the ball metrics)")
     parser.add_argument("--fps", type=float, default=25.0, help="Sequence frame rate, for miss-duration reporting")
     parser.add_argument("--output_json", default=None)
-    parser.add_argument("--path", choices=["a", "b"], default="a",
-                        help="a: the 4-class yolov8n_gsr detector. b: the 2-class "
-                             "athlete/ball detector plus class-agnostic person scoring")
+    parser.add_argument("--path", choices=["b"], default="b",
+                        help="b: the 2-class athlete/ball detector plus class-agnostic person "
+                             "scoring (the only option since Path A was archived; kept so old "
+                             "commands still parse)")
     parser.add_argument("--backend", default=None,
                         choices=["tensorrt", "ort_gpu", "ort_cpu", "ultralytics"],
                         help="Path B only. Pin one backend instead of walking the fallback "
@@ -421,16 +420,8 @@ def main() -> None:
         print(f"No Labels-GameState.json in {sequence_dir}")
         return
 
-    two_class = args.path == "b"
-    if two_class:
-        detector = _build_path_b_detector(args)
-    else:
-        with open(args.config, "r") as f:
-            cfg = yaml.safe_load(f)
-        det_cfg = dict(cfg.get("detector", {}))
-        if args.device:
-            det_cfg["device"] = args.device
-        detector = YOLOv8nDetector(**det_cfg)
+    two_class = True
+    detector = _build_path_b_detector(args)
 
     report = evaluate(sequence_dir, detector, args.person_iou, args.ball_match_px,
                       args.max_frames, args.fps, two_class=two_class,

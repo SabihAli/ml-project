@@ -1,21 +1,10 @@
 # Default configuration for gsr_pipeline
 
 detector:
-  model_path: "yolov8n_gsr.pt"  # Path A 4-class YOLOv8n (~18 MB, repo root)
-  conf_threshold: 0.25
-  ball_conf_threshold: 0.15
-  iou_threshold: 0.45
-  device: "cpu"            # change to "cuda" if GPU available
-  batch_size: 8
-
-detector_b:
-  # Path B's 2-class athlete/ball detector (gsr_pipeline/detect_athlete.py), per the
-  # 2026-09-23 decision in docs/path_b/DETECTOR_AND_DATA_BLOCKERS.md. Separate from `detector`
-  # above so Path A stays runnable as the baseline until Phase 9 removes it
-  # (docs/path_b/plans/IMPLEMENTATION_PLAN.md 12).
-  #
-  # Not yet wired into GSRPipeline -- used by evaluate_detection.py --path b. The live
-  # pipeline picks it up in Phase 2.
+  # The 2-class athlete/ball detector (gsr_pipeline/detect_athlete.py), per the 2026-09-23
+  # decision in docs/path_b/DETECTOR_AND_DATA_BLOCKERS.md. It emits no roles: `live_roles`
+  # below recovers player/goalkeeper/referee and teams from kit colour. (Path A's 4-class
+  # YOLOv8n is in archive/path_a/ since 2026-10-25.)
   onnx_path: "runs/yolo26s_athlete_ball/best_736x1280.onnx"
                            # 736x1280 is 16:9 at stride 32; a 1280x1280 square would pad
                            # ~44% wasted compute. best_1280x1280.onnx is also exported, for
@@ -36,7 +25,22 @@ detector_b:
   # which carries the training config's values -- keeping them in one place stops the
   # runtime and the parity gate's reference from drifting apart (plan 3.5).
 
+ball_specialist:
+  # The temporal ball specialist c5c (gsr_pipeline/ball_specialist.py). Runs only on frames
+  # the detector missed the ball, on a 640x640 window at the last sighting, frames t-2..t.
+  # Test sequences: ball recall 59.4% -> 69.5%, precision 85.3% -> 86.5% (PERF_LOG 2026-10-16).
+  enabled: true
+  onnx_path: "runs/ball_temporal/c5c/ball_specialist_c5c.onnx"
+  threshold: null          # null = the sidecar's 0.70, chosen on `select` and frozen for the
+                           # test gate. Changing it changes the measured trade-off.
+  max_miss_frames: 15      # frames since the last sighting it still runs (what gate 3 measured)
+  device: "cuda:0"         # ignored on the CPU tier
+  backend: null            # null walks tensorrt -> ort_gpu -> ort_cpu, like `detector`
+  auto_build_engine: true  # build the TensorRT engine next to the ONNX on first launch
+
 reid:
+  # OSNet embeddings. Only the batch path's `refiner` uses them (merging tracklets), so the
+  # model is loaded only when refiner.enabled is true. Teams come from `live_roles`.
   model_name: "osnet_x0_25"
   weights_path: null       # null uses torchreid market1501 pretrained weights
   device: "cpu"
@@ -97,13 +101,10 @@ jersey:
   gpu: false               # Set true if easyocr can use GPU
   batch_size: 8
 
-team:
-  n_clusters: 2   # Team A / Team B only -- referees & goalkeepers are already
-                  # classified by the detector and excluded from clustering.
-  random_state: 0
-
 refiner:
-  enabled: true
+  enabled: false           # batch only. Needs ReID embeddings, which the measured Path B
+                           # pipeline does not compute (notebooks/path_b_eval.py runs without
+                           # it); true loads OSNet and runs split/merge/interpolate.
   speed_threshold: 10.0
   reid_threshold: 0.3
   interpolation_limit: 15
@@ -130,49 +131,20 @@ possession:
                               # frames, not seconds; convert using the source video's
                               # actual fps when tuning
 
-pitch_view_gate:
-  # "Is this frame actually a usable pitch view" -- gsr_pipeline/pitch_view_gate.py.
-  # Used both to gate live team-assignment bootstrap accumulation and to pause
-  # ongoing per-frame team classification during a mid-stream cutaway to a
-  # non-pitch camera angle (replay, crowd, bench, graphics overlay). See
-  # docs/architecture/STREAMING_ARCHITECTURE.md §1.7.2.
-  min_player_detections: 4   # minimum player+goalkeeper detections for a frame
-                              # to count as "on the pitch" (in addition to
-                              # requiring pitch calibration to have succeeded)
-
-team_live:
-  # Incremental live team assignment (gsr_pipeline/team_live.py) -- distinct
-  # from the batch `team` section above, since the live algorithm is
-  # structurally different (per-frame, adaptive centroids vs. one-shot
-  # whole-sequence KMeans). See docs/architecture/STREAMING_ARCHITECTURE.md §1.7.
-  reid_weight: 0.3            # see team.combine_color_reid's docstring: due to
-                               # squared-distance dynamics, this does NOT mean
-                               # "30% influence" -- effective influence is far
-                               # lower (~8% at this value); named/tunable rather
-                               # than hardcoded, not a corrected value
-  bootstrap_window_s: 1.0     # gated pitch-view seconds needed to seed centroids
-                               # (gated time, not wall-clock stream time -- a
-                               # pre-match crowd shot doesn't count or delay this
-                               # for no reason, it's simply skipped)
-  bootstrap_min_tracklets: 6  # minimum distinct tracklets before attempting the
-                               # initial 2-cluster fit; window extends rather
-                               # than forcing a fit on insufficient diversity
-  confidence_threshold: 0.25  # symmetric relative-margin threshold (0=ambiguous,
-                               # 1=unambiguous) to lock a track's team permanently;
-                               # provisional, needs empirical tuning against real
-                               # broadcast footage
-  reclassify_interval_s: 3.0  # retry interval for tracks that haven't locked yet
-  bootstrap_seed_weight: 1.0  # the one-time bootstrap KMeans fit is treated as
-                               # equivalent to this much weight when seeding the
-                               # adaptive running-mean centroids -- i.e. one
-                               # confident observation's worth, not an
-                               # overwhelming prior later updates can't shift
+live_roles:
+  # Roles + teams for the detector's `athlete` boxes (gsr_pipeline/live_roles.py), fitted
+  # per match with `athlete_roles` below. Batch: fit on the first fit_frames frames, then a
+  # vote per tracklet. Live: buffer until fit_frames, fit, then a running vote per track.
+  fit_frames: 250              # 10 s at 25 fps, the window notebooks/path_b_eval.py measured
+                               # (0 = whole sequence, batch only)
+  refit_every_frames: 50       # live: after a failed fit (one kit visible), retry this much later
+  max_buffer_frames: 1500      # live: buffer cap before the fit
+  min_athletes_for_pitch_view: 4  # is_pitch_view on the wire: this many athletes with a pitch position
 
 athlete_roles:
-  # Role + team classification for role-agnostic "athlete" detections
-  # (gsr_pipeline/athlete_roles.py). Not wired into GSRPipeline yet -- used by
-  # evaluate_athlete_roles.py. Values were tuned on ONE sequence (SNGS-021); treat as
-  # provisional until checked on other matches (see docs/path_b/DETECTOR_AND_DATA_BLOCKERS.md §5).
+  # Kit-colour role + team classifier (gsr_pipeline/athlete_roles.py), driven by `live_roles`.
+  # Values were tuned on ONE sequence (SNGS-021); on GT boxes over 3 sequences, role accuracy
+  # 95.5% and team 98.2% (DETECTOR_AND_DATA_BLOCKERS.md §5).
   n_clusters: 6               # colour clusters before lighting-variant merging
   merge_dist: 25.0            # clusters closer than this (weighted Lab) are one kit in sun/shade;
                               # results were flat for 24-28 but 15-20 split a kit and mislabelled
@@ -187,8 +159,8 @@ athlete_roles:
   random_state: 0
 
 reid_worker_pool:
-  # Background worker pool for ReID embeddings + jersey OCR in process_stream
-  # (live mode only -- the batch path still runs these inline). See
+  # Background worker pool for jersey OCR in process_stream (live mode only -- the batch
+  # path runs it inline). No ReID live: teams come from live_roles. See
   # gsr_pipeline/reid_worker_pool.py, docs/architecture/STREAMING_ARCHITECTURE.md §1.7.6.
   max_workers: 2               # concurrent appearance-extraction threads
   max_queue_size: 8            # in-flight job cap; a full queue DROPS the
@@ -232,8 +204,7 @@ streaming:
   # api/ layer tunables (docs/architecture/STREAMING_ARCHITECTURE.md §2-3).
   max_active_streams: 1        # enforces the v1 single-stream-at-a-time constraint
   process_stream_fps: 25.0     # passed to GSRPipeline.process_stream's `fps` arg
-                                # -- drives LiveTeamAssigner bootstrap-window
-                                # accumulation (§1.7.3), NOT derived from the
-                                # source's real frame rate automatically yet
+                                # (frame duration in the appearance-job context);
+                                # not derived from the source's real frame rate yet
   log_progress_every_n_frames: 250  # aggregate progress logging cadence (avoids
                                      # per-frame log spam at streaming throughput)

@@ -87,6 +87,10 @@ def main():
     ap.add_argument("--data", type=Path, default=Path("data/outputs/ball_temporal/dataset"))
     ap.add_argument("--n", type=int, default=64, help="parity crops")
     ap.add_argument("--opset", type=int, default=17)
+    ap.add_argument("--batch", type=int, default=1,
+                    help="static batch size (3 = the 3-window variant, docs/plans/BALL_IMPROVEMENT_PLAN.md §4.1). "
+                         "gsr_pipeline/ball_specialist.py loads batch 1 only until that variant is wired.")
+    ap.add_argument("--report", type=Path, default=None, help="also write the parity results here as JSON")
     a = ap.parse_args()
 
     ck = torch.load(a.ckpt, map_location="cpu", weights_only=False)
@@ -95,7 +99,8 @@ def main():
     model = ExportWrapper(net).eval()
 
     a.out.parent.mkdir(parents=True, exist_ok=True)
-    dummy = torch.zeros(1, 9, CROP, CROP)
+    B = a.batch
+    dummy = torch.zeros(B, 9, CROP, CROP)
     torch.onnx.export(model, dummy, str(a.out), input_names=["frames"], output_names=["heatmap", "offset"],
                       opset_version=a.opset, do_constant_folding=True, dynamo=False)
     meta = {
@@ -104,10 +109,10 @@ def main():
         "checkpoint": str(a.ckpt).replace("\\", "/"),
         "epoch": ck.get("epoch"),
         "channels": ck["channels"],
-        "input": {"name": "frames", "shape": [1, 9, CROP, CROP], "dtype": "float32",
+        "input": {"name": "frames", "shape": [B, 9, CROP, CROP], "dtype": "float32",
                   "layout": "RGB crops of frames t-2, t-1, t, values 0..255; preprocessing in graph"},
-        "outputs": {"heatmap": {"shape": [1, 1, CROP // STRIDE, CROP // STRIDE], "activation": "sigmoid (host)"},
-                    "offset": {"shape": [1, 2, CROP // STRIDE, CROP // STRIDE]}},
+        "outputs": {"heatmap": {"shape": [B, 1, CROP // STRIDE, CROP // STRIDE], "activation": "sigmoid (host)"},
+                    "offset": {"shape": [B, 2, CROP // STRIDE, CROP // STRIDE]}},
         "stride": STRIDE,
         "crop": CROP,
         "threshold": a.threshold,
@@ -121,22 +126,29 @@ def main():
     with torch.no_grad():
         ref = [decode(*model(torch.from_numpy(c)[None]))[0].numpy() for c in crops]
     providers = [p for p in ("CPUExecutionProvider", "CUDAExecutionProvider") if p in ort.get_available_providers()]
-    ok_all = True
+    ok_all, results = True, {}
+    n_full = len(crops) - len(crops) % B          # the graph is static: whole batches only
     for prov in providers:
         sess = ort.InferenceSession(str(a.out), providers=[prov])
         if prov not in sess.get_providers():
             print(f"{prov}: requested but not active, skipped")
             continue
         dp, dc = [], []
-        for c, r in zip(crops, ref):
-            hm, off = sess.run(None, {"frames": c[None]})
-            p = decode(torch.from_numpy(hm), torch.from_numpy(off))[0].numpy()
-            dp.append(float(np.hypot(*(p[:2] - r[:2]))))
-            dc.append(float(abs(p[2] - r[2])))
+        for k in range(0, n_full, B):
+            hm, off = sess.run(None, {"frames": np.stack(crops[k:k + B])})
+            ps = decode(torch.from_numpy(hm), torch.from_numpy(off)).numpy()
+            for p, r in zip(ps, ref[k:k + B]):
+                dp.append(float(np.hypot(*(p[:2] - r[:2]))))
+                dc.append(float(abs(p[2] - r[2])))
         ok = max(dp) <= POINT_TOL_PX and max(dc) <= CONF_TOL
         ok_all &= ok
-        print(f"{prov}: {len(crops)} crops, max point diff {max(dp):.4f} px, max conf diff {max(dc):.2e} "
+        results[prov] = {"crops": len(dp), "max_point_diff_px": max(dp), "max_conf_diff": max(dc), "pass": ok}
+        print(f"{prov}: {len(dp)} crops (batch {B}), max point diff {max(dp):.4f} px, max conf diff {max(dc):.2e} "
               f"-> {'PASS' if ok else 'FAIL'}")
+    if a.report:
+        a.report.parent.mkdir(parents=True, exist_ok=True)
+        a.report.write_text(json.dumps({"onnx": str(a.out), "batch": B, "threshold": a.threshold,
+                                        "providers": results, "pass": ok_all}, indent=1))
     sys.exit(0 if ok_all else 1)
 
 

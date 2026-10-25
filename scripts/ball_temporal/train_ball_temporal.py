@@ -24,7 +24,17 @@ numpy, opencv-python, matplotlib.
   * AMP, AdamW, linear warm-up then cosine decay.
 
 Output (<out>/): best.pt, last.pt (model + optimiser + epoch; resumable with --resume), history.csv,
-curves.png, args.json.
+curves.png, args.json, and DONE (finished: epochs or early stop) or INCOMPLETE (stopped by
+--time_budget_h; run again with --resume).
+
+Added for docs/plans/BALL_IMPROVEMENT_PLAN.md item 3 (2026-10-25):
+  * --init <ckpt>: warm start from another checkpoint's weights (e.g. c5c/best.pt); optimiser and
+    schedule start fresh. Use a lower --lr than the original run.
+  * Multi-GPU: launch with `torchrun --nproc_per_node 2 train_ball_temporal.py ...`. Each GPU
+    draws its own weighted sample stream (1/world of an epoch); validation, checkpoints and logs
+    on rank 0 only.
+  * --time_budget_h: stop after the epoch that would otherwise run past the budget (Kaggle's 12 h
+    session limit), leaving last.pt to resume from.
 
     python scripts/ball_temporal/train_ball_temporal.py --data data/outputs/ball_temporal/dataset \
         --out runs/ball_temporal/c9 --channels 9
@@ -36,8 +46,10 @@ import argparse
 import csv
 import json
 import math
+import os
 import sys
 import time
+from datetime import timedelta
 from pathlib import Path
 
 import cv2
@@ -207,6 +219,28 @@ def plot(hist, path):
     plt.close(fig)
 
 
+def _init_distributed():
+    """(world size, rank, local rank or None). torchrun sets WORLD_SIZE / RANK / LOCAL_RANK."""
+    world = int(os.environ.get("WORLD_SIZE", "1"))
+    if world <= 1:
+        return 1, 0, None
+    import torch.distributed as dist
+    dist.init_process_group("nccl", timeout=timedelta(minutes=60))     # rank 0 validates while others wait
+    local = int(os.environ["LOCAL_RANK"])
+    torch.cuda.set_device(local)
+    return world, dist.get_rank(), local
+
+
+def _agree(flag: bool, dev, world: int) -> bool:
+    """Rank 0's decision, on every rank."""
+    if world <= 1:
+        return flag
+    import torch.distributed as dist
+    t = torch.tensor([int(flag)], device=dev)
+    dist.broadcast(t, 0)
+    return bool(t.item())
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", type=Path, default=Path("data/outputs/ball_temporal/dataset"))
@@ -226,14 +260,24 @@ def main():
     ap.add_argument("--resume", action="store_true", help="continue from <out>/last.pt")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--motion_blur", type=float, default=0.0, help="share of training samples given motion blur")
+    ap.add_argument("--init", type=Path, default=None, help="warm start: load this checkpoint's weights (not optimiser)")
+    ap.add_argument("--time_budget_h", type=float, default=0.0,
+                    help="stop before an epoch would end past this many hours (0 = no limit); resume with --resume")
     a = ap.parse_args()
 
-    torch.manual_seed(a.seed)
+    world, rank, local = _init_distributed()
+    main_rank = rank == 0
+    log = (lambda *s, **k: print(*s, **k, flush=True)) if main_rank else (lambda *s, **k: None)
+    t_start = time.time()
+    torch.manual_seed(a.seed + rank)
     torch.backends.cudnn.benchmark = True
-    dev = torch.device(a.device)
+    dev = torch.device(f"cuda:{local}") if local is not None else torch.device(a.device)
     amp = not a.no_amp and dev.type == "cuda"
     a.out.mkdir(parents=True, exist_ok=True)
-    (a.out / "args.json").write_text(json.dumps({k: str(v) for k, v in vars(a).items()}, indent=1))
+    if main_rank:
+        for marker in ("DONE", "INCOMPLETE"):
+            (a.out / marker).unlink(missing_ok=True)
+        (a.out / "args.json").write_text(json.dumps({**{k: str(v) for k, v in vars(a).items()}, "world": world}, indent=1))
 
     tr_rows = [r for r in read_manifest(a.data, ("train", "pool")) if r["kind"] != "outside"]
     va_rows = read_manifest(a.data, ("select",))
@@ -241,16 +285,24 @@ def main():
         va_rows = [va_rows[i] for i in np.random.default_rng(a.seed).choice(len(va_rows), min(a.limit, len(va_rows)), replace=False)]
     weights = torch.tensor([float(r["repeat"]) for r in tr_rows])
     n_epoch = a.limit or int(weights.sum())
-    sampler = WeightedRandomSampler(weights, n_epoch, replacement=True)
+    sampler = WeightedRandomSampler(weights, max(n_epoch // world, a.batch), replacement=True,
+                                    generator=torch.Generator().manual_seed(a.seed * 1000 + rank))
     tr = DataLoader(TemporalCrops(a.data, tr_rows, True, blur_p=a.motion_blur), a.batch, sampler=sampler, num_workers=a.workers,
                     pin_memory=True, drop_last=True, persistent_workers=a.workers > 0)
     va = DataLoader(TemporalCrops(a.data, va_rows, False), a.batch, shuffle=False, num_workers=a.workers,
-                    pin_memory=True, persistent_workers=a.workers > 0)
-    print(f"train {len(tr_rows)} crops ({n_epoch} per epoch), select {len(va_rows)}, "
-          f"{a.channels} channels, batch {a.batch}, amp {amp}", flush=True)
+                    pin_memory=True, persistent_workers=a.workers > 0) if main_rank else None
+    log(f"train {len(tr_rows)} crops ({n_epoch} per epoch over {world} GPU(s)), select {len(va_rows)}, "
+        f"{a.channels} channels, batch {a.batch} per GPU, amp {amp}")
 
-    model = BallHeatmapNet(a.channels, pretrained=not a.no_pretrained).to(dev)   # channels_last was 4x slower (3090, torch 2.6)
-    opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=a.wd)
+    net = BallHeatmapNet(a.channels, pretrained=not (a.no_pretrained or a.init)).to(dev)   # channels_last was 4x slower (3090, torch 2.6)
+    if a.init and not (a.resume and (a.out / "last.pt").exists()):
+        ck0 = torch.load(a.init, map_location=dev, weights_only=False)
+        if int(ck0.get("channels", a.channels)) != a.channels:
+            raise SystemExit(f"--init {a.init} has {ck0.get('channels')} channels, this run {a.channels}")
+        net.load_state_dict(ck0["model"])
+        log(f"warm start from {a.init} (epoch {ck0.get('epoch')})")
+    model = net
+    opt = torch.optim.AdamW(net.parameters(), lr=a.lr, weight_decay=a.wd)
     steps_per_epoch = len(tr)
     total, warm = a.epochs * steps_per_epoch, int(a.warmup * steps_per_epoch)
     sched = torch.optim.lr_scheduler.LambdaLR(
@@ -261,10 +313,10 @@ def main():
     hist, best, start, bad = [], -1.0, 1, 0
     if a.resume and (a.out / "last.pt").exists():
         ck = torch.load(a.out / "last.pt", map_location=dev, weights_only=False)
-        model.load_state_dict(ck["model"]); opt.load_state_dict(ck["opt"])
+        net.load_state_dict(ck["model"]); opt.load_state_dict(ck["opt"])
         sched.load_state_dict(ck["sched"]); scaler.load_state_dict(ck["scaler"])
         hist, best, bad, start = ck["hist"], ck["best"], ck["bad"], ck["epoch"] + 1
-        if ck.get("metric") != METRIC:      # selected on the old single-threshold recall: re-score
+        if ck.get("metric") != METRIC and main_rank:   # selected on the old single-threshold recall: re-score
             print("re-scoring best.pt and last.pt with the current selection score", flush=True)
             v_last = validate(model, va, a.channels, dev, amp)
             bk = torch.load(a.out / "best.pt", map_location=dev, weights_only=False)
@@ -284,8 +336,12 @@ def main():
                             "metrics": {**hist[-1], **v_last}}, a.out / "best.pt")
             else:
                 best, bad = v_best["score"], ck["epoch"] - bk["epoch"]
-        print(f"resumed at epoch {start}, best select score {best:.4f}, {bad} epochs since", flush=True)
+        log(f"resumed at epoch {start}, best select score {best:.4f}, {bad} epochs since")
 
+    if world > 1:
+        model = torch.nn.parallel.DistributedDataParallel(net, device_ids=[local])
+    epoch_min = []
+    stopped_by_budget = False
     for ep in range(start, a.epochs + 1):
         model.train()
         t0, tl, n = time.time(), 0.0, 0
@@ -303,35 +359,58 @@ def main():
             sched.step()
             tl, n = tl + loss.item(), n + 1
             if i % 100 == 0 or i == steps_per_epoch:
-                print(f"  ep {ep} {i}/{steps_per_epoch} loss {tl / n:.4f} (hm {lh.item():.3f} off {lo.item():.3f}) "
-                      f"lr {sched.get_last_lr()[0]:.2e} {(time.time() - t0) / i:.2f}s/it", flush=True)
-        v = validate(model, va, a.channels, dev, amp)
-        h = {"epoch": ep, "train_loss": tl / max(n, 1), **v, "minutes": (time.time() - t0) / 60}
-        hist.append(h)
-        improved = v["score"] > best
-        if improved:
-            best, bad = v["score"], 0
-            torch.save({"model": model.state_dict(), "channels": a.channels, "epoch": ep, "metrics": h},
-                       a.out / "best.pt")
-        else:
-            bad += 1
-        torch.save({"model": model.state_dict(), "opt": opt.state_dict(), "sched": sched.state_dict(),
-                    "scaler": scaler.state_dict(), "channels": a.channels, "epoch": ep, "hist": hist,
-                    "best": best, "bad": bad, "metric": METRIC}, a.out / "last.pt")
-        with open(a.out / "history.csv", "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=list(h), restval="")
-            w.writeheader()
-            w.writerows(hist)
-        plot(hist, a.out / "curves.png")
-        print(f"epoch {ep}: train {h['train_loss']:.4f} select loss {v['val_loss']:.4f} | score {v['score']:.2%} "
-              f"(hard {v['score_hard']:.2%}, easy {v['score_easy']:.2%}) | recall {v['recall']:.2%} "
-              f"(hard {v['recall_hard']:.2%}, easy {v['recall_easy']:.2%}) at thr {v['thr']:.3f} | "
-              f"outside fire {v['outside_fire']:.0%} | recall@0.5 {v['recall@0.5']:.2%}, empty FPR@0.5 {v['empty_fpr@0.5']:.2%} | "
-              f"{h['minutes']:.1f} min{'  *best*' if improved else ''}", flush=True)
-        if bad >= a.patience:
-            print(f"early stop: no better select score for {a.patience} epochs", flush=True)
+                per_it = (time.time() - t0) / i
+                eta_ep = per_it * (steps_per_epoch - i) / 60
+                mem = f" mem {torch.cuda.max_memory_allocated(dev) / 2**30:.1f}G" if dev.type == "cuda" else ""
+                log(f"  ep {ep}/{a.epochs} {i}/{steps_per_epoch} loss {tl / n:.4f} (hm {lh.item():.3f} off {lo.item():.3f}) "
+                    f"lr {sched.get_last_lr()[0]:.2e} {per_it:.2f}s/it, epoch ETA {eta_ep:.1f} min{mem}")
+        stop = False
+        if main_rank:
+            v = validate(net, va, a.channels, dev, amp)
+            h = {"epoch": ep, "train_loss": tl / max(n, 1), **v, "minutes": (time.time() - t0) / 60}
+            hist.append(h)
+            epoch_min.append(h["minutes"])
+            improved = v["score"] > best
+            if improved:
+                best, bad = v["score"], 0
+                torch.save({"model": net.state_dict(), "channels": a.channels, "epoch": ep, "metrics": h},
+                           a.out / "best.pt")
+            else:
+                bad += 1
+            torch.save({"model": net.state_dict(), "opt": opt.state_dict(), "sched": sched.state_dict(),
+                        "scaler": scaler.state_dict(), "channels": a.channels, "epoch": ep, "hist": hist,
+                        "best": best, "bad": bad, "metric": METRIC}, a.out / "last.pt")
+            with open(a.out / "history.csv", "w", newline="") as f:
+                w = csv.DictWriter(f, fieldnames=list(h), restval="")
+                w.writeheader()
+                w.writerows(hist)
+            plot(hist, a.out / "curves.png")
+            left = (a.epochs - ep) * float(np.mean(epoch_min[-3:]))
+            log(f"epoch {ep}/{a.epochs}: train {h['train_loss']:.4f} select loss {v['val_loss']:.4f} | score {v['score']:.2%} "
+                f"(hard {v['score_hard']:.2%}, easy {v['score_easy']:.2%}) | recall {v['recall']:.2%} "
+                f"(hard {v['recall_hard']:.2%}, easy {v['recall_easy']:.2%}) at thr {v['thr']:.3f} | "
+                f"outside fire {v['outside_fire']:.0%} | recall@0.5 {v['recall@0.5']:.2%}, empty FPR@0.5 {v['empty_fpr@0.5']:.2%} | "
+                f"{h['minutes']:.1f} min{'  *best*' if improved else ''} | run ETA {left / 60:.1f} h")
+            if bad >= a.patience:
+                log(f"early stop: no better select score for {a.patience} epochs")
+                stop = True
+            elif a.time_budget_h and ep < a.epochs:
+                used_h = (time.time() - t_start) / 3600
+                next_h = 1.15 * max(epoch_min[-3:]) / 60
+                if used_h + next_h > a.time_budget_h:
+                    log(f"time budget: {used_h:.2f} h used, next epoch ~{next_h:.2f} h, budget {a.time_budget_h} h -> "
+                        f"stopping after epoch {ep}; continue with --resume")
+                    stop = stopped_by_budget = True
+        stop = _agree(stop, dev, world)
+        if stop:
             break
-    print(f"best select score {best:.2%}; {a.out / 'best.pt'}", flush=True)
+    if main_rank:
+        (a.out / ("INCOMPLETE" if stopped_by_budget else "DONE")).write_text(
+            json.dumps({"best_score": best, "epochs_run": len(hist), "hours": (time.time() - t_start) / 3600}))
+        log(f"best select score {best:.2%}; {a.out / 'best.pt'} ({'INCOMPLETE' if stopped_by_budget else 'DONE'})")
+    if world > 1:
+        import torch.distributed as dist
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":

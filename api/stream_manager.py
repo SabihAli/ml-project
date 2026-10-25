@@ -28,9 +28,7 @@ from api.event_broadcaster import EventBroadcaster
 from api.event_serializer import serialize_event
 from gsr_pipeline.frame_source import FrameSource, LiveBroadcastFrameSource, VideoFileFrameSource
 from gsr_pipeline.pipeline import GSRPipeline
-from gsr_pipeline.pitch_view_gate import PitchViewGate
 from gsr_pipeline.reid_worker_pool import ReidWorkerPool
-from gsr_pipeline.team_live import LiveTeamAssigner
 
 log = logging.getLogger(__name__)
 
@@ -205,9 +203,8 @@ class StreamManager:
         self, stream_id: str, frame_source: FrameSource, stop_event: threading.Event,
         broadcaster: Optional[EventBroadcaster],
     ) -> None:
-        gate = PitchViewGate(self._cfg.get("pitch_view_gate", {}))
-        assigner = LiveTeamAssigner(self._cfg.get("team_live", {}))
-        pool = ReidWorkerPool(self._pipeline.reid, self._pipeline.jersey, self._cfg.get("reid_worker_pool", {}))
+        # Jersey OCR only: live teams come from the pipeline's kit-colour roles, not ReID.
+        pool = ReidWorkerPool(None, self._pipeline.jersey, self._cfg.get("reid_worker_pool", {}))
 
         counters = {"fast": 0, "appearance": 0}
 
@@ -233,8 +230,7 @@ class StreamManager:
         try:
             summary = self._pipeline.process_stream(
                 frame_source, on_frame_result,
-                stop_event=stop_event, pitch_view_gate=gate,
-                live_team_assigner=assigner, reid_pool=pool,
+                stop_event=stop_event, reid_pool=pool,
                 fps=self._smcfg.process_stream_fps,
             )
             with self._lock:

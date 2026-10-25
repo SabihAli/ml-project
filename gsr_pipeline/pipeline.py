@@ -1,39 +1,44 @@
 """
 pipeline.py — Main GSRPipeline orchestrator.
 
-Coordinates all modules (detection, reid, tracking, calibration, jersey, team)
-into a single end-to-end inference process.
+Coordinates detection, ball fusion, tracking, calibration, roles/teams and jersey OCR into one
+end-to-end process, batch (`process_sequence`) or live (`process_stream`).
+
+The detector is the 2-class athlete/ball model (detect_athlete.py). It emits no roles, so roles
+and teams come from kit colour (live_roles.py over athlete_roles.py). The ball is one row per
+frame: the detector's top ball, or the c5c specialist's when the detector missed
+(ball_specialist.py). Path A (the 4-class YOLOv8n) is in archive/path_a/.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from gsr_pipeline.frame_source import FrameSource, ImageDirFrameSource
-from gsr_pipeline.detect import YOLOv8nDetector
-from gsr_pipeline.reid import OSNetReID
-from gsr_pipeline.track import ByteTracker
-from gsr_pipeline.calibrate import (
-    NBJWKeypointDetector,
-    project_detections
-)
+from gsr_pipeline.athlete_roles import torso_descriptor
+from gsr_pipeline.ball_specialist import BallFuser, BallSpecialist
+from gsr_pipeline.calibrate import NBJWKeypointDetector, project_detections
 from gsr_pipeline.calibration_live import LiveCalibrator
+from gsr_pipeline.detect_athlete import ATHLETE_CLASS, BALL_CLASS, AthleteBallDetector
+from gsr_pipeline.frame_source import FrameSource, ImageDirFrameSource
 from gsr_pipeline.jersey import EasyOCRJerseyDetector
-from gsr_pipeline.team import TeamClassifier
-from gsr_pipeline.tracklet_agg import TrackletAggregator
+from gsr_pipeline.live_roles import LiveAthleteRoles, assign_sequence_roles
 from gsr_pipeline.refine import refine_tracks
-from gsr_pipeline.pitch_view_gate import PitchViewGate
-from gsr_pipeline.team_live import LiveTeamAssigner
-from gsr_pipeline.reid_worker_pool import ReidWorkerPool, AppearanceJobResult
+from gsr_pipeline.reid_worker_pool import AppearanceJobResult, ReidWorkerPool
+from gsr_pipeline.track import ByteTracker
+from gsr_pipeline.tracklet_agg import TrackletAggregator
 
 log = logging.getLogger(__name__)
+
+# One ball per frame under one constant id: a stand-in until the BallTracker exists
+# (BALL_TEMPORAL_PLAN.md section 7). Same ids as notebooks/path_b_eval.py.
+BALL_TRACK_ID = 90_000
+SINGLETON_ID_START = 100_000    # batch: ids for athletes the tracker did not associate
 
 
 class GSRPipeline:
@@ -45,12 +50,20 @@ class GSRPipeline:
             cfg: Configuration dictionary (usually loaded from default.yaml).
         """
         self.cfg = cfg
-        
-        # Initialize modules
-        self.detector = YOLOv8nDetector(**cfg.get("detector", {}))
-        self.reid = OSNetReID(**cfg.get("reid", {}))
+
+        self.detector = AthleteBallDetector(**cfg.get("detector", {}))
+
+        spec_cfg = cfg.get("ball_specialist", {})
+        self.ball_specialist: Optional[BallSpecialist] = None
+        if spec_cfg.get("enabled", True):
+            self.ball_specialist = BallSpecialist(
+                onnx_path=spec_cfg.get("onnx_path", "runs/ball_temporal/c5c/ball_specialist_c5c.onnx"),
+                device=spec_cfg.get("device", "cuda:0"),
+                backend=spec_cfg.get("backend"),
+                auto_build_engine=spec_cfg.get("auto_build_engine", True),
+            )
         self.tracker = ByteTracker(**cfg.get("tracker", {}))
-        
+
         calib_cfg = cfg.get("calibration", {})
         self.kp_detector = NBJWKeypointDetector(
             checkpoint_kp=calib_cfg.get("checkpoint_kp"),
@@ -65,12 +78,22 @@ class GSRPipeline:
         )
         self._calib_cfg = calib_cfg
         self.calibrator = self._new_calibrator()
-        
-        self.jersey = EasyOCRJerseyDetector(**cfg.get("jersey", {}))
-        self.team = TeamClassifier(**cfg.get("team", {}))
-        self.tracklet_agg = TrackletAggregator()
 
-        log.info("GSRPipeline initialized successfully.")
+        self.jersey = EasyOCRJerseyDetector(**cfg.get("jersey", {}))
+        self.tracklet_agg = TrackletAggregator()
+        self._reid = None             # OSNet, loaded only for the batch refiner (see `reid`)
+
+        log.info("GSRPipeline initialized (detector backend %s, ball specialist %s).",
+                 self.detector.backend,
+                 self.ball_specialist.backend.value if self.ball_specialist else "off")
+
+    @property
+    def reid(self):
+        """OSNet ReID, built on first use. Only the batch refiner needs embeddings."""
+        if self._reid is None:
+            from gsr_pipeline.reid import OSNetReID
+            self._reid = OSNetReID(**self.cfg.get("reid", {}))
+        return self._reid
 
     def _new_calibrator(self) -> LiveCalibrator:
         """Fresh per-sequence/per-stream calibration state (anchor H, motion chain)."""
@@ -90,42 +113,52 @@ class GSRPipeline:
             motion=c.get("motion"),
         )
 
-    def _detect_track_calibrate(self, frame_idx: int, img: np.ndarray):
-        """The latency-critical subset shared by both process_sequence and
-        process_stream: detect -> assign roles (cheap, no ReID forward pass)
-        -> track -> calibrate. Deliberately excludes ReID embeddings and
-        jersey OCR (both expensive) -- process_sequence calls those inline
-        right after this (unchanged batch behavior); process_stream defers
-        them to a background ReidWorkerPool (see reid_worker_pool.py and
-        docs/architecture/STREAMING_ARCHITECTURE.md §1.7.6) so position/role events are
-        never gated behind them.
+    def _new_ball_fuser(self) -> BallFuser:
+        """Fresh per-sequence/per-stream ball state (frame ring, last sighting)."""
+        c = self.cfg.get("ball_specialist", {})
+        return BallFuser(self.ball_specialist, threshold=c.get("threshold"),
+                         max_miss_frames=c.get("max_miss_frames", 15))
 
-        Returns (df, cam_params, keypoints, lines).
+    def _new_live_roles(self) -> LiveAthleteRoles:
+        c = self.cfg.get("live_roles", {})
+        return LiveAthleteRoles(
+            self.cfg.get("athlete_roles", {}),
+            fit_frames=c.get("fit_frames", 250),
+            refit_every_frames=c.get("refit_every_frames", 50),
+            max_buffer_frames=c.get("max_buffer_frames", 1500),
+            min_athletes_for_pitch_view=c.get("min_athletes_for_pitch_view", 4),
+        )
+
+    def _detect_track_calibrate(self, frame_idx: int, img: np.ndarray, ball_fuser: BallFuser):
+        """The latency-critical subset shared by process_sequence and process_stream:
+        detect -> ball fusion (specialist on a miss) -> track athletes -> calibrate -> project.
+        Roles, teams and jersey OCR come after, per mode.
+
+        Returns (df, cam_params, keypoints, lines). df has one row per athlete plus at most one
+        ball row (track_id BALL_TRACK_ID, `ball_source` main | specialist).
         """
-        df = self.detector.process_sequence([img])[0]
+        det = self.detector.detect(img)
+        athletes = det[det["class_id"] == ATHLETE_CLASS].reset_index(drop=True)
+        ball = ball_fuser.update(frame_idx, img, det[det["class_id"] == BALL_CLASS])
+
+        df = self.tracker.update(athletes, img.shape[:2])
+        if ball is not None:
+            ball_row = pd.DataFrame([{**ball, "track_id": BALL_TRACK_ID}])
+            df = ball_row if df.empty else pd.concat([df, ball_row], ignore_index=True)
         df["image_id"] = frame_idx
 
-        roles, role_confs = self.reid.assign_roles(df, img.shape[0], img.shape[1])
-        df["role_detection"] = roles
-        df["role_confidence"] = role_confs
-
-        df = self.tracker.update(df, img.shape)
-
         boxes = None
-        if len(df):
-            boxes = np.asarray(df["bbox_ltwh"].tolist(), dtype=np.float64).reshape(-1, 4)
-            boxes[:, 2:] += boxes[:, :2]          # ltwh -> ltrb, for the camera-motion mask
+        if len(det):
+            boxes = np.asarray(det["bbox_ltrb"].tolist(), dtype=np.float64).reshape(-1, 4)
         calib = self.calibrator.update(frame_idx, img, boxes)
         keypoints, lines, cam_params = calib.keypoints, calib.lines, calib.cam_params
         df = project_detections(df, calib.H)
         df["h_source"] = calib.h_source
         df["h_age_frames"] = calib.h_age_frames
 
-        # Flatten pitch coordinates for easier downstream use (tracking, refinement)
+        # Flatten pitch coordinates for easier downstream use (roles, refinement, the wire)
         if "bbox_pitch" in df.columns and not df["bbox_pitch"].isna().all():
-            # Correctly expand dict to columns while preserving index
             pitch_coords = df["bbox_pitch"].apply(pd.Series)
-            # Drop existing columns if they already exist to avoid duplicates
             cols_to_drop = [c for c in pitch_coords.columns if c in df.columns]
             df = pd.concat([df.drop(columns=cols_to_drop), pitch_coords], axis=1)
 
@@ -140,27 +173,22 @@ class GSRPipeline:
 
         Args:
             source: Either a path to a directory containing an img1/ folder
-                (str/Path -- wrapped in an ImageDirFrameSource automatically,
-                preserving the exact behavior this method had before the
-                FrameSource abstraction existed), or any FrameSource instance
-                directly (e.g. VideoFileFrameSource) for callers that want to
-                run batch-style processing over a non-image-directory source.
-            max_frames:   Limit processing to the first N frames.
+                (wrapped in an ImageDirFrameSource), or any FrameSource instance.
+            max_frames: Limit processing to the first N frames.
 
         Returns:
             Dictionary containing final DataFrames and metadata.
 
-        Note: this reads the ENTIRE source into memory up front before the
-        per-frame loop starts (same as the pre-FrameSource behavior) --
-        Phase 2 (tracklet aggregation, team, refinement) below needs the
-        complete sequence regardless of what FrameSource it came from. This
-        method is not a streaming/live-mode entry point; see
-        docs/architecture/STREAMING_ARCHITECTURE.md §1.6 for that (process_stream, not yet
-        implemented).
+        Reads the whole source into memory first: roles (fit on the first
+        live_roles.fit_frames frames, then a vote per tracklet) and the optional refiner need
+        the complete sequence.
         """
         frame_source = source if isinstance(source, FrameSource) else ImageDirFrameSource(str(source))
         self.calibrator.close()
         self.calibrator = self._new_calibrator()
+        ball_fuser = self._new_ball_fuser()
+        refine_cfg = self.cfg.get("refiner", {})
+        use_refiner = refine_cfg.get("enabled", False)
 
         frame_source.connect()
         try:
@@ -179,17 +207,24 @@ class GSRPipeline:
         # 1. Frame-level processing
         all_detections = []
         metadata = {}
+        next_singleton = SINGLETON_ID_START
 
         for frame_idx, img in tqdm(frames, desc="Frame processing"):
-            # A-D. Detect, assign roles, track, calibrate (shared fast path)
-            df, cam_params, keypoints, lines = self._detect_track_calibrate(frame_idx, img)
+            df, cam_params, keypoints, lines = self._detect_track_calibrate(frame_idx, img, ball_fuser)
+            is_athlete = (df["class_id"] == ATHLETE_CLASS) if len(df) else pd.Series(dtype=bool)
 
-            # E. ReID embeddings + color histograms (expensive; batch mode
-            # still runs this inline, synchronously, right here -- unchanged)
-            df = self.reid.extract_appearance_features(img, df)
+            # Untracked athletes get their own ids, as in notebooks/path_b_eval.py.
+            for i in df.index[is_athlete & df["track_id"].isna()] if len(df) else []:
+                df.at[i, "track_id"] = next_singleton
+                next_singleton += 1
 
-            # F. Jersey Number OCR
+            df["torso_desc"] = [torso_descriptor(img, df.at[i, "bbox_ltrb"]) if is_athlete.at[i] else None
+                                for i in df.index]
+            # Jersey OCR reads player/goalkeeper rows; every athlete is a candidate until roles exist.
+            df["role_detection"] = np.where(is_athlete, "player", "ball") if len(df) else []
             df = self.jersey.process_frame(img, df)
+            if use_refiner:
+                df = self.reid.extract_appearance_features(img, df)
 
             all_detections.append(df)
             metadata[frame_idx] = {
@@ -198,23 +233,19 @@ class GSRPipeline:
                 "lines": lines
             }
 
-        # Combine all frame detections
         full_df = pd.concat(all_detections, ignore_index=True)
         meta_df = pd.DataFrame.from_dict(metadata, orient="index")
         meta_df.index.name = "image_id"
+        log.info("Ball: %s", ball_fuser.stats)
 
-        # 2. Sequence-level processing (Post-processing)
-        log.info("Applying sequence-level post-processing...")
-        
-        # F. Tracklet Aggregation (Voting)
+        # 2. Sequence-level processing
+        role_info = assign_sequence_roles(full_df, self.cfg.get("athlete_roles", {}),
+                                          self.cfg.get("live_roles", {}).get("fit_frames", 250))
+        log.info("Roles: %s", role_info)
         full_df = self.tracklet_agg.process_sequence(full_df)
-        
-        # G. Team Clustering & Side Labeling
-        full_df = self.team.process_sequence(full_df)
+        full_df.loc[~full_df["role"].isin(["player", "goalkeeper"]), "jersey_number"] = None
 
-        # H. Tracklet Refinement (Splitting/Merging)
-        refine_cfg = self.cfg.get("refiner", {})
-        if refine_cfg.get("enabled", True):
+        if use_refiner:
             log.info("Refining tracklets (splitting/merging)...")
             full_df = refine_tracks(
                 full_df,
@@ -226,7 +257,9 @@ class GSRPipeline:
         return {
             "detections": full_df,
             "metadata": meta_df,
-            "frames": frames # Keep for visualization if needed
+            "frames": frames,  # Keep for visualization if needed
+            "ball_stats": dict(ball_fuser.stats),
+            "role_info": role_info,
         }
 
     # ------------------------------------------------------------------
@@ -239,68 +272,37 @@ class GSRPipeline:
         frame_source: FrameSource,
         on_frame_result: Callable[[Dict[str, Any]], None],
         stop_event: Optional[threading.Event] = None,
-        pitch_view_gate: Optional[PitchViewGate] = None,
-        live_team_assigner: Optional[LiveTeamAssigner] = None,
         reid_pool: Optional[ReidWorkerPool] = None,
         fps: float = 25.0,
     ) -> Dict[str, Any]:
-        """Run the pipeline over a live/streaming frame source, Phase 1 only.
+        """Run the pipeline over a live/streaming frame source.
 
-        Unlike process_sequence, this does NOT accumulate a full_df and does
-        NOT run Phase 2 (tracklet aggregation, batch team clustering,
-        refinement) -- those require the complete sequence, which a live
-        stream never has (§1.6). Team assignment is instead handled
-        incrementally by `live_team_assigner` (LiveTeamAssigner, §1.7), gated
-        by `pitch_view_gate` (§1.7.2).
-
-        Per frame:
-          1. detect -> assign roles -> track -> calibrate (shared fast path,
-             `_detect_track_calibrate`) runs inline, synchronously -- this is
-             the latency-critical subset (PIPELINE_EVOLUTION.md §2).
-          2. `on_frame_result` is called immediately with a "fast" result
-             (position + role data for this frame) -- never blocked on ReID.
-          3. If `reid_pool` is provided, the frame's crops are submitted for
-             background embedding/color/jersey extraction; any already-
-             completed jobs from previous frames are drained (non-blocking)
-             and fed to `live_team_assigner`, then reported via
-             `on_frame_result` as an "appearance" result. All appearance-job
-             consumption happens on THIS thread (not a worker thread), so
-             `live_team_assigner` (documented non-thread-safe) is never
-             touched concurrently.
+        Per frame, on this thread:
+          1. detect -> ball fusion -> track -> calibrate (`_detect_track_calibrate`);
+          2. roles and teams from `LiveAthleteRoles` (kit colour, fitted on the first
+             live_roles.fit_frames frames, then a running vote per track);
+          3. `on_frame_result` gets a "fast" result (positions, roles, teams, the ball) --
+             never blocked on OCR;
+          4. if `reid_pool` is given, the frame is submitted for background jersey OCR, and
+             finished jobs are drained (non-blocking) and reported as "appearance" results
+             carrying each track's current team.
 
         Args:
-            frame_source: typically a LiveBroadcastFrameSource in production,
-                or a VideoFileFrameSource as a stand-in (no
-                LiveBroadcastFrameSource exists yet -- §8 build-order step 9).
-            on_frame_result: called once per fast result and once per
-                completed appearance result. Never called concurrently by
-                this method (single-threaded call site).
-            stop_event: set externally to request a clean stop; checked once
-                per frame.
-            pitch_view_gate: if omitted, every frame is treated as a pitch
-                view (gate effectively disabled) -- useful for tests that
-                don't care about cutaway handling.
-            live_team_assigner: if omitted, no team assignment happens and
-                appearance results carry an empty team_results dict.
-            reid_pool: if omitted, ReID/jersey are never computed in this
-                loop at all (position/role only) -- useful for tests of the
-                fast path in isolation.
-            fps: source frame rate, used only to derive frame_duration_s for
-                LiveTeamAssigner's bootstrap accumulation (§1.7.3) -- NOT
-                derived from frame_source timestamps, per that method's own
-                documented reasoning (a timestamp delta across a
-                non-pitch-view gap would wrongly count as gated time).
+            frame_source: typically a LiveBroadcastFrameSource, or a VideoFileFrameSource as a
+                stand-in.
+            on_frame_result: called once per fast result and once per completed appearance
+                result. Never called concurrently by this method.
+            stop_event: set externally to request a clean stop; checked once per frame.
+            reid_pool: if omitted, no jersey OCR runs (positions, roles and teams only).
+            fps: source frame rate, for `frame_duration_s` in the appearance-job context.
 
         Returns:
-            A summary dict: {"frame_count": int, "disconnect_reason": Any}.
-            `disconnect_reason` is whatever `frame_source` exposes (if
-            anything) when `read_frame()` returns None -- distinguishing a
-            live source's unexpected drop from a finite source's normal
-            completion is `frame_source`'s responsibility (§1.3), not this
-            method's.
+            {"frame_count", "disconnect_reason", "ball_stats", "roles_fitted"}.
         """
         self.calibrator.close()
         self.calibrator = self._new_calibrator()
+        ball_fuser = self._new_ball_fuser()
+        roles = self._new_live_roles()
         frame_source.connect()
         frame_duration_s = 1.0 / fps
         frame_count = 0
@@ -314,9 +316,9 @@ class GSRPipeline:
                     break
 
                 timestamp_s = record.timestamp_ms / 1000.0
-                df, cam_params, keypoints, lines = self._detect_track_calibrate(record.frame_idx, record.image)
-
-                is_pitch_view = pitch_view_gate.is_pitch_view(df) if pitch_view_gate is not None else True
+                df, cam_params, keypoints, lines = self._detect_track_calibrate(
+                    record.frame_idx, record.image, ball_fuser)
+                df, is_pitch_view = roles.update(record.frame_idx, record.image, df)
 
                 on_frame_result({
                     "type": "fast",
@@ -335,7 +337,7 @@ class GSRPipeline:
                             "frame_duration_s": frame_duration_s,
                         },
                     )
-                    self._drain_appearance_results(reid_pool, live_team_assigner, on_frame_result, block=False)
+                    self._drain_appearance_results(reid_pool, roles, on_frame_result, block=False)
 
                 frame_count += 1
         finally:
@@ -343,14 +345,17 @@ class GSRPipeline:
             self.calibrator.close()
             if reid_pool is not None:
                 reid_pool.shutdown(wait=True)
-                self._drain_appearance_results(reid_pool, live_team_assigner, on_frame_result, block=False)
+                self._drain_appearance_results(reid_pool, roles, on_frame_result, block=False)
 
-        return {"frame_count": frame_count, "disconnect_reason": disconnect_reason}
+        log.info("process_stream: %d frames, ball %s, roles fitted=%s",
+                 frame_count, ball_fuser.stats, roles.fitted)
+        return {"frame_count": frame_count, "disconnect_reason": disconnect_reason,
+                "ball_stats": dict(ball_fuser.stats), "roles_fitted": roles.fitted}
 
     def _drain_appearance_results(
         self,
         reid_pool: ReidWorkerPool,
-        live_team_assigner: Optional[LiveTeamAssigner],
+        roles: LiveAthleteRoles,
         on_frame_result: Callable[[Dict[str, Any]], None],
         block: bool,
     ) -> None:
@@ -358,23 +363,21 @@ class GSRPipeline:
             result = reid_pool.poll_results(block=block)
             if result is None:
                 return
-            self._handle_appearance_result(result, live_team_assigner, on_frame_result)
+            self._handle_appearance_result(result, roles, on_frame_result)
 
     @staticmethod
     def _handle_appearance_result(
         result: AppearanceJobResult,
-        live_team_assigner: Optional[LiveTeamAssigner],
+        roles: LiveAthleteRoles,
         on_frame_result: Callable[[Dict[str, Any]], None],
     ) -> None:
-        ctx = result.context
+        # Teams are a running vote, never locked for good; `locked` stays False on the wire.
         team_results: Dict[Any, dict] = {}
-        if live_team_assigner is not None:
-            team_results = live_team_assigner.process_frame(
-                result.detections_df,
-                ctx.get("is_pitch_view", True),
-                ctx.get("timestamp_s", 0.0),
-                ctx.get("frame_duration_s", 1.0 / 25.0),
-            )
+        for track in result.detections_df.get("track_id", pd.Series(dtype=float)).dropna().unique():
+            if int(track) == BALL_TRACK_ID:
+                continue
+            team, confidence = roles.track_team(track)
+            team_results[track] = {"team": team, "confidence": confidence, "locked": False}
         on_frame_result({
             "type": "appearance",
             "frame_idx": result.frame_idx,

@@ -9,13 +9,15 @@ The pipeline (`gsr_pipeline`) is a lightweight reimplementation of the SoccerNet
 YOLO detection, ByteTrack, NBJW pitch calibration, OSNet appearance, EasyOCR jerseys, and the
 official GS-HOTA metric. How it works and how well: `docs/architecture/GSR_PIPELINE.md`.
 
-Two detectors exist:
-- **Path A** (default): 4-class YOLOv8n, `yolov8n_gsr.pt` at the repo root.
-- **Path B** (in progress): 2-class YOLO26s athlete/ball, in `runs/yolo26s_athlete_ball/`,
-  with roles and teams recovered downstream. Status: `docs/path_b/plans/IMPLEMENTATION_PLAN.md` §12.1.
+The pipeline is **Path B** (since 2026-10-25, batch and live):
+- a 2-class YOLO26s athlete/ball detector (`runs/yolo26s_athlete_ball/`);
+- the temporal ball specialist **c5c** (`runs/ball_temporal/c5c/`) on frames where the detector
+  missed the ball: on the 15 held-out test sequences, ball recall 59.4% → 69.5%, precision
+  85.3% → 86.5%;
+- roles and teams from kit colour (`gsr_pipeline/live_roles.py`).
 
-**Path B is the primary direction (2026-10-12).** Path A is being retired: it is removed in
-Phase 9 of the Path B plan (§12.2). Don't build new work on Path A.
+Status per phase: `docs/path_b/plans/IMPLEMENTATION_PLAN.md` §12.1. The old 4-class YOLOv8n
+pipeline (Path A) is in `archive/path_a/` and is not used.
 
 Agent-facing repo guidance: `AGENTS.md`.
 
@@ -115,8 +117,8 @@ whole pipeline.
 ## Configuration
 
 All runtime settings live in `gsr_pipeline/configs/default.yaml`, one section per stage
-(`detector`, `detector_b`, `reid`, `tracker`, `calibration`, `jersey`, `team`, `refiner`,
-`output`, `possession`, `pitch_view_gate`, `team_live`, `athlete_roles`, `reid_worker_pool`,
+(`detector`, `ball_specialist`, `reid`, `tracker`, `calibration`, `jersey`, `refiner`,
+`output`, `possession`, `live_roles`, `athlete_roles`, `reid_worker_pool`,
 `live_broadcast`, `frame_source`, `ws`, `streaming`).
 The inline comments explain each tunable and where its value came from.
 
@@ -162,7 +164,7 @@ docs/                  see Documentation
 runs/yolo26s_athlete_ball/   Path B detector: best.pt, ONNX exports and sidecars (tracked)
 runs/ball_temporal/c5c/      ball specialist: best.pt, ONNX + sidecar, training args and curves (tracked)
 data/                  gitignored: datasets/SoccerNetGS/, outputs/, pretrained_models/
-yolov8n_gsr.pt         Path A detector (the default config's detector.model_path)
+archive/path_a/        the retired Path A pipeline (4-class YOLOv8n), not imported
 ```
 
 ## License

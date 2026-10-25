@@ -98,7 +98,8 @@ class ReidWorkerPool:
         future.add_done_callback(self._on_done)
 
     def _run_job(self, frame_idx, image_bgr, detections_df, context) -> AppearanceJobResult:
-        df = self._reid.extract_appearance_features(image_bgr, detections_df)
+        # reid is None on the live path today (teams come from live_roles), so only OCR runs.
+        df = detections_df if self._reid is None else self._reid.extract_appearance_features(image_bgr, detections_df)
         if self._jersey is not None:
             df = self._jersey.process_frame(image_bgr, df)
         return AppearanceJobResult(frame_idx=frame_idx, detections_df=df, context=context)

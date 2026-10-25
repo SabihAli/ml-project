@@ -22,6 +22,11 @@ Per ball-labelled frame t (frames without a ball label give no crops, plan §3):
     a long gap), the crop is kept as kind `outside`, with an empty label: the runtime sees it too.
   * Negatives, from positive-sampled frames only: hard (person or pitch-line point, +-64 px) for
     15% of crops and random for 5%; no ball in the window at t, t-1 or t-2.
+  * --centre predicted (docs/plans/BALL_IMPROVEMENT_PLAN.md §4.3): the window is centred on the
+    ball tracker's prediction instead (gsr_pipeline/ball_tracker.py replayed over main sightings,
+    with camera motion from camera_motion_cache.py), falling back to the rule above when there is
+    no live track; centre_source "kf". --gap2_repeat k multiplies the repeat of pool hard
+    positives whose centre is >= 2 frames old. Defaults reproduce the c5c dataset.
   * Frames t-1, t-2 are cut with the window chosen at t. Before the sequence start they repeat
     frame t (n_prev < 2). The 5% "repeat t" training case is an augmentation in step 3, not here.
 
@@ -51,6 +56,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "gsr_pipeline"))     # ball_tracker.py, plain import
 from gsr_io import SeqReader, decode, discover, parse_labels  # noqa: E402
 
 SPLITS = ("train", "pool", "select", "test")
@@ -131,9 +137,26 @@ def _centre(t, dets, balls, pred_conf, rng):
     return None
 
 
+def _tracker_centres(files, dets, motion, pred_conf, tracker_cfg: dict | None) -> dict:
+    """--centre predicted: {t: (cx, cy, gap)} = the ball tracker's prediction at t (before it sees
+    frame t), replayed over main-detector sightings only (conf >= pred_conf), for frames 1..LOOKBACK
+    after the last accepted sighting. Same tracker as the runtime (gsr_pipeline/ball_tracker.py)."""
+    import ball_tracker as bt
+    cfg = bt.TrackerConfig(**{**(tracker_cfg or {}), "min_conf_main": pred_conf, "init_conf": pred_conf})
+    tr = bt.BallTracker(cfg)
+    out = {}
+    for t in sorted(files):
+        pred = tr.predict(t, motion.get(t))
+        gap = tr.gap if tr.last_meas is not None else None
+        if pred is not None and gap is not None and 1 <= gap <= LOOKBACK:
+            out[t] = (pred[0], pred[1], gap)
+        tr.update([bt.BallCandidate(d[0], d[1], d[4]) for d in dets.get(t, []) if d[4] >= pred_conf])
+    return out
+
+
 def process_sequence(job):
     import cv2
-    ref, cache_dir, out, seed, pred_conf, quality = job
+    ref, cache_dir, out, seed, pred_conf, quality, centre_mode, motion_dir, gap2_repeat, tracker_cfg = job
     part = Path(out) / "parts" / f"{ref.name}.csv"
     if part.exists():
         with open(part, newline="") as f:
@@ -143,6 +166,11 @@ def process_sequence(job):
     reader = SeqReader(ref)
     try:
         im_dir, files, balls, persons, lines, (W, H) = parse_labels(reader.labels())
+        kf = {}
+        if centre_mode == "predicted":
+            import camera_motion_cache as cmc
+            motion = cmc.load(Path(motion_dir), ref) if motion_dir else {}
+            kf = _tracker_centres(files, dets, motion, pred_conf, tracker_cfg)
         seq_dir = Path(out) / ref.split / ref.name
         seq_dir.mkdir(parents=True, exist_ok=True)
         frames_cache: dict[int, np.ndarray] = {}
@@ -165,7 +193,11 @@ def process_sequence(job):
             rng = np.random.default_rng([seed, ref.number, t])
             jobs = []        # (kind, x0, y0, clamped, points, meta)
 
-            c = _centre(t, dets, balls, pred_conf, rng)
+            c = None
+            if centre_mode == "predicted" and t in kf:
+                c = (kf[t][0], kf[t][1], "kf", kf[t][2])
+            if c is None:
+                c = _centre(t, dets, balls, pred_conf, rng)
             if c is not None:
                 x0, y0, clamped = clamp_window(c[0], c[1], W, H)
                 pts, dropped = balls_in_window(bt, x0, y0)
@@ -173,6 +205,8 @@ def process_sequence(job):
                     kind = ("hard" if sample_hard else "easy") if pts else "outside"
                     conf = _matched_conf(dets.get(t, []), gts) if pts else _conf_in_window(dets.get(t, []), x0, y0)
                     rep = HARD_REPEAT if kind == "hard" and ref.split == "pool" else 1
+                    if kind == "hard" and ref.split == "pool" and int(c[3]) >= 2:
+                        rep *= gap2_repeat                # plan §4.3: more balls far from the last sighting
                     jobs.append((kind, x0, y0, clamped, pts,
                                  dict(centre_source=c[2], centre_gap=c[3], main_conf=conf, repeat=rep)))
 
@@ -241,7 +275,13 @@ def stage_build(a):
         raise SystemExit(f"no main-detector cache for {len(missing)} sequences, e.g. {missing[:3]}; run step 1")
     print(f"{len(refs)} sequences, {a.workers} workers", flush=True)
     a.out.mkdir(parents=True, exist_ok=True)
-    jobs = [(r, str(a.cache), str(a.out), a.seed, a.pred_conf, a.jpeg_quality) for r in refs]
+    tracker_cfg = None
+    if a.tracker_config:
+        tracker_cfg = json.loads(a.tracker_config.read_text()).get("tracker")
+    if a.centre == "predicted":
+        print(f"window centre: ball tracker prediction (motion {a.motion}, tracker config {a.tracker_config})", flush=True)
+    jobs = [(r, str(a.cache), str(a.out), a.seed, a.pred_conf, a.jpeg_quality, a.centre,
+             str(a.motion) if a.motion else None, a.gap2_repeat, tracker_cfg) for r in refs]
     t0, rows = time.time(), []
     with Pool(a.workers) as pool:
         for i, (name, r, cached) in enumerate(pool.imap_unordered(process_sequence, jobs), 1):
@@ -327,6 +367,14 @@ def main():
     ap.add_argument("--pred_conf", type=float, default=0.15, help="main-detector confidence counted as a sighting")
     ap.add_argument("--jpeg_quality", type=int, default=95)
     ap.add_argument("--n", type=int, default=6, help="preview: samples per kind")
+    ap.add_argument("--centre", choices=["last_seen", "predicted"], default="last_seen",
+                    help="window centre: the last main sighting (as c5c trained) or the ball tracker's "
+                         "prediction (docs/plans/BALL_IMPROVEMENT_PLAN.md §4.3); needs --motion")
+    ap.add_argument("--motion", type=Path, default=None, help="camera_motion_cache.py output (--centre predicted)")
+    ap.add_argument("--tracker_config", type=Path, default=None,
+                    help="tracker_config.json from eval_ball_temporal.py track (its `tracker` section)")
+    ap.add_argument("--gap2_repeat", type=int, default=1,
+                    help="extra repeat factor for pool hard positives whose window centre is >= 2 frames old")
     a = ap.parse_args()
     if a.stage == "build" and not a.src:
         ap.error("--src is required")
