@@ -14,6 +14,7 @@ Standalone tools, grouped by the plan or task they serve. None of them is import
 | `ball_improvement/` | `docs/plans/BALL_IMPROVEMENT_PLAN.md` | `build_ball_notebook.py` -> `notebooks/kaggle_ball_improvement.ipynb` |
 | `pipeline_improvement_1/phase0/` | `docs/plans/PIPELINE_IMPROVEMENT_PLAN_1.md` Phase 0 | `phase0_report.py` (miss buckets B0-B7, ceilings, stage/size metrics, split integrity), `build_phase0_notebook.py` -> `notebooks/pipeline_improvement_1/phase0_baseline.ipynb` |
 | `pipeline_improvement_1/phase1/` | same plan, Phase 1 tasks 1-2 | `phase1_sweep.py` (detector-ball plausibility gate `gsr_pipeline/ball_gate.py` + c5c threshold, chosen on `select`, frozen for `test`), `build_phase1_notebook.py` -> `notebooks/pipeline_improvement_1/phase1_gate_threshold.ipynb` |
+| `pipeline_improvement_1/phase4/` | same plan, Phase 4 (robust ball tracker) | `phase4_sweep.py` (`gsr_pipeline/ball_tracker_robust.py` driving main + c5c: knob search on `select`, frozen `test` vs Phase 1, ablations, recall by condition), `build_phase4_notebook.py` -> `notebooks/pipeline_improvement_1/phase4_tracker.ipynb`; `sort_compare.py` (boxmot ByteTrack / OC-SORT / BoT-SORT driving main + c5c vs Phase 1), `build_sort_notebook.py` -> `notebooks/pipeline_improvement_1/phase4b_sort.ipynb` |
 
 New work for a plan phase goes in `<plan>/<phase>/`. Kaggle notebooks are generated from the
 repo files by a `build_*_notebook.py` script (code goes in as `%%writefile` cells), so edit the

@@ -13,7 +13,9 @@ Standalone apart from gsr_io.py (same folder). Needs ultralytics>=8.4.0 (YOLO26)
 
 Cache: <out>/<split>/<SNGS-xxx>.json =
   {"meta": {weights, imgsz, conf, top}, "frames": {"<frame>": {"balls": [[cx, cy, w, h, conf], ...],
-                                                               "gt": [[cx, cy, size], ...]}}}
+                                                               "gt": [[cx, cy, size], ...],
+                                                               "athletes": [[cx, cy, w, h, conf], ...]}}}
+  (athletes only with --athletes)
 balls: every ball detection with conf >= --conf, highest first, at most --top, in native pixels.
 Finished sequences are skipped, and each file is written atomically, so a stopped run resumes.
 
@@ -50,6 +52,18 @@ def _balls(result, cls: int, top: int) -> list[list[float]]:
     return [[round(float(v), 2) for v in (*xywh[i], conf[i])] for i in order]
 
 
+def _athletes(result, ball_cls: int, top: int, min_conf: float) -> list[list[float]]:
+    """Every non-ball box at conf >= min_conf, highest first, at most top: [cx, cy, w, h, conf]."""
+    b = result.boxes
+    if b is None or len(b) == 0:
+        return []
+    conf = b.conf.cpu().numpy()
+    keep = (b.cls.cpu().numpy().astype(int) != ball_cls) & (conf >= min_conf)
+    xywh, conf = b.xywh.cpu().numpy()[keep], conf[keep]
+    order = np.argsort(-conf)[:top]
+    return [[round(float(v), 1) for v in (*xywh[i], conf[i])] for i in order]
+
+
 def _refs(a):
     refs = [r for r in discover(a.src) if r.split in a.splits]
     if a.seqs:
@@ -74,7 +88,8 @@ def stage_run(a):
     kw = dict(imgsz=a.imgsz, conf=a.conf, iou=0.7, max_det=300, device=a.device, verbose=False)
     if a.half:
         kw["half"] = True                         # only when asked: Ultralytics 8.4 warns on any `half`
-    meta = {"weights": str(a.weights), "imgsz": a.imgsz, "conf": a.conf, "top": a.top}
+    meta = {"weights": str(a.weights), "imgsz": a.imgsz, "conf": a.conf, "top": a.top,
+            "athletes": a.athletes, "athlete_conf": a.athlete_conf}
 
     refs = [r for i, r in enumerate(_refs(a)) if i % a.nshards == a.shard]
     tag = f"[gpu{a.device}]"
@@ -98,6 +113,7 @@ def stage_run(a):
             imgs = list(pool.map(decode, bufs))
             for f, r in zip(chunk, model.predict(imgs, **kw)):
                 rec[str(f)] = {"balls": _balls(r, cls, a.top),
+                               **({"athletes": _athletes(r, cls, 40, a.athlete_conf)} if a.athletes else {}),
                                "gt": [[round(b[0], 2), round(b[1], 2), round(max(b[2], b[3]), 2)]
                                       for b in gt.get(f, [])]}
         rd.close()
@@ -154,6 +170,9 @@ def main():
     ap.add_argument("--imgsz", type=int, default=1280, help="1280 = the 736x1280 runtime input after letterbox")
     ap.add_argument("--conf", type=float, default=0.05, help="lowest ball confidence kept in the cache")
     ap.add_argument("--top", type=int, default=5, help="most ball detections kept per frame")
+    ap.add_argument("--athletes", action="store_true",
+                    help="also cache athlete boxes (\"athletes\": [[cx, cy, w, h, conf], ...], up to 40) for the ball tracker")
+    ap.add_argument("--athlete_conf", type=float, default=0.3, help="lowest athlete confidence kept with --athletes")
     ap.add_argument("--device", default="0")
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--half", action="store_true", help="FP16 inference (GPU only)")

@@ -15,6 +15,24 @@ changed. Numbers from a machine that is not the production host are tagged as su
 
 ---
 
+## 2026-11-11: pipeline improvement plan 1, Phase 4 (ball tracker) — reverted
+
+Tag: `kaggle-t4`. `phase4_tracker.ipynb` (`phase4_sweep.py`) and `phase4b_sort.ipynb`
+(`sort_compare.py`, boxmot 26.0.0). Knobs chosen on `select`, frozen for `test`.
+Raw: `data/outputs/pipeline_improvement_1/phase4/`. Details: `docs/results/PIPELINE_IMPROVEMENT_1_PHASE4.md`.
+
+| test | recall @15 | precision | longest miss |
+|---|---|---|---|
+| **Phase 1 (live)** | **76.29%** | **90.21%** | 248 |
+| robust tracker (IMM + camera + occlusion) | 73.88% | 88.84% | 310 |
+| ByteTrack | 73.86% | 90.18% | 252 |
+| OC-SORT | 69.57% | 89.20% | 252 |
+| BoT-SORT (no re-id) | 68.23% | 90.40% | 586 |
+
+Nothing kept; the runtime is unchanged.
+
+---
+
 ## 2026-11-10: pipeline improvement plan 1, Phase 1 (plausibility gate + c5c threshold)
 
 Tag: `kaggle-t4`. `notebooks/pipeline_improvement_1/phase1_gate_threshold.ipynb`

@@ -2,7 +2,7 @@
 
 ## Ball Detection: Recall, Robustness, and Real-Time Performance
 
-**Status:** In progress. Phase 0 closed 2026-11-09, Phase 1 closed 2026-11-10; next: Phase 4 (tracker) or Phase 3 (specialist), see §7.\
+**Status:** In progress. Phase 0 closed 2026-11-09, Phase 1 closed 2026-11-10, Phase 4 closed 2026-11-11 (reverted: no tracker beat Phase 1); next Phase 3, then 2 -> 5 -> 6 (§5).\
 **Primary objective:** Reach **90%+ ball-detection recall** while
 retaining real-time performance within the existing system's end-to-end
 latency budget.\
@@ -665,6 +665,20 @@ predicted one.
 The phases below are ordered to reduce wasted model work. Diagnose the
 failure modes before committing to more expensive architectures.
 
+**Execution order (revised 2026-11-10 from the Phase 1 miss breakdown):**
+0 -> 1 -> **4 -> 3 -> 2** -> 5 -> 6. After Phase 1 the test misses are
+B5 7.0%, B7 6.6%, B3 5.5%, B1 3.6% of ball frames. Phase 4 goes first: it
+reuses existing code, is tuned on cached replays (no training), works on
+B1 and B3 (a predicted window instead of a stale sighting), fixes the
+9.9 s longest misses, and Milestone 3 needs it in any case (predicted
+positions through occlusion). Phase 3 follows so the specialist is
+retrained on the tracker's real windows (§3.4). Phase 2 is last: B2 is
+~0, so a better detector acts only through B7 and < 10 px balls, at the
+highest cost.
+
+**Update 2026-11-11:** Phase 4 was reverted (no tracker beat Phase 1; the
+misses are detection errors, not association). Remaining order: **3 -> 2** -> 5 -> 6.
+
 ## Phase 0 --- Establish a reproducible baseline
 
 **Status: done 2026-11-09** (`docs/results/PIPELINE_IMPROVEMENT_1_PHASE0.md`). Baseline
@@ -801,6 +815,34 @@ or false positives.
 keep the search region useful when motion is non-linear. Move this phase
 ahead of Phases 2--3 if bucket 1 is the largest bucket.
 
+**Status: closed 2026-11-11, REVERTED** (`docs/results/PIPELINE_IMPROVEMENT_1_PHASE4.md`). On
+`test`, the robust tracker below reached 73.88% / 88.84% and off-the-shelf ByteTrack 73.86% /
+90.18%, OC-SORT 69.57%, BoT-SORT 68.23% (`sort_compare.py`, notebook `phase4b_sort.ipynb`), against
+Phase 1's 76.29% / 90.21%; none beat Phase 1 on `select` either. Association is not the bottleneck:
+the misses are detection errors (B3, B7, B5). Only the two-model IMM earned its place (+3.2 pp vs one
+model); camera compensation and the occlusion model did not. The code stays as a record and is not
+wired into the runtime. Original design, as built:
+Requirement: robust to occlusion, unpredictable movement and camera
+angle changes. Built (`gsr_pipeline/ball_tracker_robust.py`, a new module;
+the older `ball_tracker.py` stays for `ball_eval/ball_system.py`):
+
+| requirement | mechanism |
+|---|---|
+| unpredictable movement | IMM over a calm and a manoeuvre constant-velocity model (tasks 1-3); Mahalanobis gate from the mixed covariance, floored and capped in px |
+| occlusion | an unmeasured ball whose prediction lies inside an athlete box is attached to that athlete and follows the box (coast up to 50 frames instead of 10); the specialist keeps searching at the prediction |
+| camera angle changes / cuts | per-frame camera-motion compensation of state and covariance; no motion estimate = camera break: covariance inflated, one strong detection restarts the track (tasks 4-5, and Phase 1 task 3) |
+| reacquisition | strong detections outside the gate on 2 consecutive frames start a new track; with no track, the strongest detection starts one |
+| specialist placement | c5c window centred on the prediction, for up to `max_search_frames` (not the last sighting, not capped at 15) |
+| observed vs predicted | output source main / specialist / predicted, and an `occluded` flag (task 6) |
+
+Evaluation (`scripts/pipeline_improvement_1/phase4/phase4_sweep.py`,
+notebook `phase4_tracker.ipynb`): main cache re-built with athlete boxes,
+knobs by coordinate descent on `select`, frozen on `test` against the
+Phase 1 system; ablations without occlusion, without camera motion and
+with one motion model; recall by condition (occluded, abrupt, post-cut);
+measured and +predicted outputs scored separately (task 7). Runtime wiring
+into `BallFuser` follows only if the tracker passes the kill criterion.
+
 Tasks: 0. Build the `BallTracker` (§3.7). 1. Use predicted covariance
 for uncertainty-aware gating. 2.
 Adapt process noise for suspected kicks, bounces, and abrupt changes. 3.
@@ -932,7 +974,7 @@ If implementation time is limited, use this order:
     share of misses).
 3.  **Done 2026-11-10 (Phase 1): sweep the c5c threshold** (B5; 0.45). Cheap, and needs no new model.
     (Shifting the window by camera motion or velocity is dropped: B4 ≈ 0.)
-4.  **Build the ball tracker for gaps over 15 frames** (B1, 4.7%), and
+4.  **Next (in progress): build the ball tracker** (Phase 4, now before Phases 2-3) for gaps over 15 frames (B1, 3.6% after Phase 1), and
     for predicting hidden balls if Milestone 3 counts predictions.
 5.  **Run a controlled YOLO26s P2@1280 experiment** if B7 and the
     < 10 px misses remain large after step 2.
