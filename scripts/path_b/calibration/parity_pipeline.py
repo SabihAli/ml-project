@@ -11,7 +11,7 @@ ships. Checks implemented so far:
 
 Exit code 0 = identical on every frame, 1 = any difference (details printed).
 
-    python scripts/parity_pipeline.py --data_root data/datasets/SoccerNetGS/gamestate-2024/valid \\
+    python scripts/path_b/calibration/parity_pipeline.py --data_root data/datasets/SoccerNetGS/gamestate-2024/valid \\
         --sequences SNGS-021 SNGS-022 SNGS-023 --frames 100 --backend tensorrt --device cuda:0
 """
 
@@ -25,7 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 

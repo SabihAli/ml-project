@@ -28,11 +28,19 @@ detector:
 ball_specialist:
   # The temporal ball specialist c5c (gsr_pipeline/ball_specialist.py). Runs only on frames
   # the detector missed the ball, on a 640x640 window at the last sighting, frames t-2..t.
-  # Test sequences: ball recall 59.4% -> 69.5%, precision 85.3% -> 86.5% (PERF_LOG 2026-10-16).
+  # Test sequences: ball recall 59.4% -> 69.5%, precision 85.3% -> 86.5% (PERF_LOG 2026-10-16);
+  # with the gate below and threshold 0.45: 76.3% / 90.2% (PERF_LOG 2026-11-10, Phase 1 of
+  # docs/plans/PIPELINE_IMPROVEMENT_PLAN_1.md). Gate and threshold were chosen together on
+  # `select`; change them together.
   enabled: true
   onnx_path: "runs/ball_temporal/c5c/ball_specialist_c5c.onnx"
-  threshold: null          # null = the sidecar's 0.70, chosen on `select` and frozen for the
-                           # test gate. Changing it changes the measured trade-off.
+  threshold: 0.45          # null = the sidecar's 0.70 (the pre-gate setting)
+  gate:                    # detector-ball plausibility check (gsr_pipeline/ball_gate.py); remove = off
+    enabled: true
+    r0: 30.0               # px allowed at any gap
+    speed: 50.0            # + px per frame since the last sighting
+    conf_hi: 0.6           # detector balls at or above this are accepted regardless
+    max_rejects: 15        # consecutive rejections before the top ball is forced
   max_miss_frames: 15      # frames since the last sighting it still runs (what gate 3 measured)
   device: "cuda:0"         # ignored on the CPU tier
   backend: null            # null walks tensorrt -> ort_gpu -> ort_cpu, like `detector`
@@ -61,7 +69,7 @@ calibration:
   device: "cpu"
   use_prev_homography: true
   # NBJW forward backend: torch (eager, the accuracy reference) | auto | tensorrt | ort_gpu
-  # | ort_cpu. Non-torch backends need the ONNX from scripts/export_nbjw.py; `auto` tries a
+  # | ort_cpu. Non-torch backends need the ONNX from scripts/path_b/calibration/export_nbjw.py; `auto` tries a
   # TensorRT engine next to the ONNX, then ORT GPU, then torch.
   backend: "torch"
   onnx_kp: "data/pretrained_models/calibration/nbjw_kp_540x960.onnx"
@@ -72,7 +80,7 @@ calibration:
                               # minutes, once per host. Irrelevant for backend: torch.
   fast_decode: true           # gsr_pipeline/nbjw_fast_decode.py: same keypoints as the vendored
                               # decode, faster (separable max-pool, no Python loops). false =
-                              # the reference, for parity checks (scripts/parity_pipeline.py).
+                              # the reference, for parity checks (scripts/path_b/calibration/parity_pipeline.py).
   # heuristic_voting: 18 cv2.calibrateCamera fits per NBJW run, used only to fill
   # predictions.json's camera_parameters passthrough (never for projection). Off unless
   # something needs camera intrinsics.

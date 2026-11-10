@@ -16,12 +16,13 @@ doc is the place to start if the work is picked up again. Plan and decisions:
 | result (15 test clips) | system ball recall **59.4% → 69.5%** (+10.1), precision **85.3% → 86.5%** (+1.2) |
 | gates (plan §8) | 1 PASS · 2 reported · 3 **PASS** (by 0.1 points) · 4 not measured (TensorRT timing deferred) · 5 needs the tracker |
 | system threshold | **0.70** (chosen on `select`, see §6.2) |
+| update 2026-11-10 | with the detector-ball plausibility gate (`gsr_pipeline/ball_gate.py`) the runtime threshold is **0.45**: recall **76.3%**, precision **90.2%** (`docs/results/PIPELINE_IMPROVEMENT_1_PHASE1.md`). The numbers below describe c5c without the gate. |
 | checkpoint | `runs/ball_temporal/c5c/best.pt` (58 MB) |
 | ONNX + sidecar | `runs/ball_temporal/c5c/ball_specialist_c5c.onnx` (+ `.json`), parity with PyTorch checked |
 | model code | `scripts/ball_temporal/heatmap_model.py` |
 | training | `scripts/ball_temporal/train_ball_temporal.py` |
 | dataset builder | `scripts/ball_temporal/build_ball_temporal_dataset.py` (needs `cache_main_detections.py` first) |
-| evaluation | `scripts/eval/ball_det/eval_ball_temporal.py` |
+| evaluation | `scripts/ball_eval/eval_ball_temporal.py` |
 | export | `scripts/ball_temporal/export_ball_specialist.py` |
 | in the pipeline | no; the engine auto-build it will use already exists (§6.3) |
 
@@ -259,7 +260,7 @@ From the repo root, with the GSR `train`, `valid` and `test` splits extracted un
 python scripts/ball_temporal/cache_main_detections.py run --src <src> --out data/outputs/ball_temporal/main_cache --weights runs/yolo26s_athlete_ball/best.pt --device 0 --half --batch 32 --decode_threads 4
 python scripts/ball_temporal/build_ball_temporal_dataset.py build --src <src> --out data/outputs/ball_temporal/dataset --workers 8
 python scripts/ball_temporal/train_ball_temporal.py --out runs/ball_temporal/c5c --channels 5 --motion_blur 0.25
-python scripts/eval/ball_det/eval_ball_temporal.py all --ckpt runs/ball_temporal/c5c/best.pt --src <src> --out data/outputs/ball_temporal/eval/c5c
+python scripts/ball_eval/eval_ball_temporal.py all --ckpt runs/ball_temporal/c5c/best.pt --src <src> --out data/outputs/ball_temporal/eval/c5c
 python scripts/ball_temporal/export_ball_specialist.py --ckpt runs/ball_temporal/c5c/best.pt --out runs/ball_temporal/c5c/ball_specialist_c5c.onnx --threshold 0.70
 ```
 

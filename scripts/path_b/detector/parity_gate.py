@@ -18,7 +18,7 @@ Both the rectangular (736x1280) and square (1280x1280) exports are checked, whic
 A/B plan section 3.4 asks for.
 
 Usage:
-    python scripts/parity_gate.py --frames_per_sequence 100
+    python scripts/path_b/detector/parity_gate.py --frames_per_sequence 100
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ import cv2
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 VALID_ROOT = REPO_ROOT / "data" / "SoccerNetGS" / "gamestate-2024"

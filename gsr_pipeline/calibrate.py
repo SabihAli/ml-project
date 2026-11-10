@@ -159,7 +159,7 @@ def _nbjw_runner(onnx_path: Optional[str], backend: str, device: str, torch_mode
 
     `auto` tries TensorRT (an engine next to the ONNX, checked against its sidecar; built here
     on first launch if it is missing and auto_build_engine is on, or ahead of time by
-    scripts/export_nbjw.py --build_engine), then ONNX Runtime GPU, then torch.
+    scripts/path_b/calibration/export_nbjw.py --build_engine), then ONNX Runtime GPU, then torch.
     An explicitly named backend that cannot load raises instead of falling back.
     """
     on_cuda = str(device).startswith("cuda")
@@ -260,7 +260,7 @@ class NBJWKeypointDetector:
     def decode(self, hm_kp, hm_l, fast: Optional[bool] = None) -> Dict:
         """Heatmaps -> completed, normalised keypoint dict. `fast` (default: the detector's
         `fast_decode`) picks nbjw_fast_decode over the vendored reference; both give the same
-        keypoints, which scripts/parity_pipeline.py checks on real frames."""
+        keypoints, which scripts/path_b/calibration/parity_pipeline.py checks on real frames."""
         fast = self.fast_decode if fast is None else fast
         h, w = NBJW_INPUT_HW
         if fast:

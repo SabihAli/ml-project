@@ -4,13 +4,16 @@ ball_specialist.py -- the temporal ball specialist (c5c) and the per-stream logi
 The main detector misses about 4 balls in 10 on held-out footage. When it misses, the
 specialist looks at frames t-2, t-1 and t through a 640x640 window centred on the last
 sighting and predicts a point. Measured on the 15 test sequences (PERF_LOG.md, 2026-10-16):
-ball recall 59.4% -> 69.5%, precision 85.3% -> 86.5%.
+ball recall 59.4% -> 69.5%, precision 85.3% -> 86.5%. With the plausibility gate
+(ball_gate.py) and threshold 0.45, the default since 2026-11-10: 76.3% / 90.2%.
 
 `BallFuser.update` is the runtime form of the evaluator's fused chain
-(scripts/eval/ball_det/eval_ball_temporal.py, `simulate` with --chain fused). Keep the two in
+(scripts/ball_eval/eval_ball_temporal.py, `simulate` with --chain fused). Keep the two in
 step, or the measured numbers stop describing what runs:
 
-  * the main detector's top ball is the output and becomes the last sighting;
+  * the main detector's top ball is the output and becomes the last sighting (with a
+    `GateParams(enabled=True)` gate: the first plausible candidate, gsr_pipeline/ball_gate.py;
+    none plausible = treated as a detector miss);
   * otherwise, if the last sighting is at most `max_miss_frames` old, the specialist runs on
     a window centred on it (shift-clamped into the frame, no camera-motion shift); a peak at or
     above the threshold is the output and becomes the new sighting (window re-centres, gap
@@ -38,6 +41,8 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+
+from gsr_pipeline.ball_gate import BallGate, GateParams
 import pandas as pd
 import torch
 
@@ -211,6 +216,7 @@ class BallFuser:
         specialist: Optional[BallSpecialist],
         threshold: Optional[float] = None,
         max_miss_frames: int = 15,
+        gate: Optional[GateParams] = None,
     ) -> None:
         """
         Args:
@@ -219,7 +225,10 @@ class BallFuser:
                 chosen on `select` and frozen for the test gate).
             max_miss_frames: frames since the last sighting the specialist still runs. 15 is
                 what gate 3 measured; recall past 1 frame is already under 20%.
+            gate: plausibility check on the detector's candidates (ball_gate.py). None or
+                disabled = accept the top ball (the behaviour gate 3 measured).
         """
+        self.gate = BallGate(gate, max_miss_frames)
         self.specialist = specialist
         self.threshold = (specialist.artifact.threshold if specialist and threshold is None
                           else threshold)
@@ -229,7 +238,8 @@ class BallFuser:
     def reset(self) -> None:
         self._ring: "OrderedDict[int, np.ndarray]" = OrderedDict()
         self._last: Optional[tuple] = None          # (cx, cy, frame_idx, w, h)
-        self.stats = {"main": 0, "specialist_calls": 0, "specialist_hits": 0}
+        self.stats = {"main": 0, "specialist_calls": 0, "specialist_hits": 0, "gate_rejects": 0}
+        self.gate.reset()
 
     def update(self, frame_idx: int, frame_bgr: np.ndarray, balls: pd.DataFrame) -> Optional[dict]:
         """`balls`: this frame's main-detector ball rows (already at the detector's ball_conf).
@@ -240,11 +250,18 @@ class BallFuser:
             self._ring.popitem(last=False)
 
         if len(balls):
-            top = balls.sort_values("bbox_conf", ascending=False).iloc[0]
-            l, t, r, b = top["bbox_ltrb"]
-            self._last = ((l + r) / 2, (t + b) / 2, frame_idx, r - l, b - t)
-            self.stats["main"] += 1
-            return self._row((l, t, r, b), float(top["bbox_conf"]), "main", 0)
+            ranked = balls.sort_values("bbox_conf", ascending=False)
+            cands = [((l + r) / 2, (t + b) / 2, float(c))
+                     for (l, t, r, b), c in zip(ranked["bbox_ltrb"], ranked["bbox_conf"])]
+            last = self._last[:3] if self._last is not None else None
+            i = self.gate.pick(cands, frame_idx, last)
+            if i is not None:
+                top = ranked.iloc[i]
+                l, t, r, b = top["bbox_ltrb"]
+                self._last = ((l + r) / 2, (t + b) / 2, frame_idx, r - l, b - t)
+                self.stats["main"] += 1
+                return self._row((l, t, r, b), float(top["bbox_conf"]), "main", 0)
+            self.stats["gate_rejects"] += 1
 
         if self.specialist is None or self._last is None:
             return None

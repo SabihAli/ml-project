@@ -59,7 +59,7 @@ def sha256_file(path: Path, chunk: int = 1 << 20) -> str:
 @dataclass(frozen=True)
 class ModelArtifact:
     """An exported ONNX plus the sidecar contract written beside it by
-    scripts/export_athlete_detector.py."""
+    scripts/path_b/detector/export_athlete_detector.py."""
 
     onnx_path: Path
     meta: dict
@@ -98,12 +98,12 @@ class ModelArtifact:
         sidecar = Path(str(onnx_path) + ".json")
         if not onnx_path.exists():
             raise FileNotFoundError(
-                f"{onnx_path} not found. Run: python scripts/export_athlete_detector.py"
+                f"{onnx_path} not found. Run: python scripts/path_b/detector/export_athlete_detector.py"
             )
         if not sidecar.exists():
             raise FileNotFoundError(
                 f"{sidecar} not found. The ONNX must ship with the sidecar written by "
-                "scripts/export_athlete_detector.py; the runtime reads its class names, "
+                "scripts/path_b/detector/export_athlete_detector.py; the runtime reads its class names, "
                 "input size and NMS parameters from it."
             )
         meta = json.loads(sidecar.read_text())
@@ -214,7 +214,7 @@ def select_backend(
         except SidecarMismatch as exc:
             # Called out separately: the operator has a specific action to take.
             log.error(
-                "TensorRT engine refused: %s. Re-run scripts/build_trt_engine.py on this "
+                "TensorRT engine refused: %s. Re-run scripts/path_b/detector/build_trt_engine.py on this "
                 "host; continuing on the next tier.", exc,
             )
             rejected.append((tier, f"sidecar mismatch: {exc}"))

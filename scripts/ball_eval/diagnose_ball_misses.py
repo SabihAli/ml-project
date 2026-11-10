@@ -45,7 +45,7 @@ from pathlib import Path
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parents[2]
+ROOT = HERE.parents[1]
 for p in (ROOT / "scripts" / "ball_temporal", HERE):
     sys.path.insert(0, str(p))
 import camera_motion_cache as cmc  # noqa: E402

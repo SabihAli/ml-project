@@ -15,6 +15,46 @@ changed. Numbers from a machine that is not the production host are tagged as su
 
 ---
 
+## 2026-11-10: pipeline improvement plan 1, Phase 1 (plausibility gate + c5c threshold)
+
+Tag: `kaggle-t4`. `notebooks/pipeline_improvement_1/phase1_gate_threshold.ipynb`
+(`phase1_sweep.py`), replay of Phase 0's main cache. Chosen on `select`, frozen for `test`.
+Raw: `data/outputs/pipeline_improvement_1/phase1/`.
+
+| test | gate | thr | recall @15 | precision | recall w/o SNGS-050 |
+|---|---|---|---|---|---|
+| baseline | off | 0.70 | 69.44% | 86.49% | 68.80% |
+| threshold only | off | 0.40 | 73.04% | 86.02% | 72.32% |
+| gate only | r30 v80 c0.6 k15 | 0.70 | 72.30% | 90.38% | 71.53% |
+| **gate + threshold** | **r30 v50 c0.6 k15** | **0.45** | **76.29%** | **90.21%** | **75.56%** |
+
+- All three pass the kill criterion. Gate + threshold is now the default (`default.yaml`
+  `ball_specialist.threshold` / `.gate`).
+- The gate rejected 340 top balls on test, 24 of them actually correct.
+- Test misses, as % of ball frames: main false 10.2 -> 6.6, false sighting 7.7 -> 5.5, below
+  threshold 7.4 -> 7.0, long gap 4.7 -> 3.6. Recall @5 px 56.5% -> 61.4%; < 10 px balls 52.0% -> 59.8%.
+- Specialist calls 2,986 -> 3,485 on test (+17%), 21.4 ms mean each in PyTorch on the T4.
+- Longest miss unchanged (248 frames): the long gaps still need the tracker (Phase 4).
+
+---
+
+## 2026-11-09: pipeline improvement plan 1, Phase 0 baseline and miss breakdown
+
+Tag: `kaggle-t4`. `notebooks/pipeline_improvement_1/phase0_baseline.ipynb`: main `best.pt`
+(Ultralytics, imgsz 1280) + `c5c` (threshold 0.70) replayed as wired on `select` and `test`. Full
+write-up: `docs/results/PIPELINE_IMPROVEMENT_1_PHASE0.md`.
+
+| | main alone | **fused** |
+|---|---|---|
+| test recall / precision @15 px | 59.3% / 85.3% | **69.4% / 86.5%** (reproduces 69.47 / 86.51) |
+| test recall @5 / @10 px | 48.2% / 56.3% | 56.5% / 65.8% |
+
+- Test misses, as % of ball frames: main false 10.2, false sighting 7.7, c5c below threshold 7.4,
+  long gap 4.7, outside window 0.0.
+- Clip overlap test SNGS-050 / pool SNGS-039 is worth at most 0.6 pp (68.80% without SNGS-050).
+
+---
+
 ## 2026-10-16: ball temporal plan step 4c, `c5c` (more clips + motion blur)
 
 Tag: `rtx-3090`. `train_ball_temporal.py --channels 5 --motion_blur 0.25`, 51,866 training crops
@@ -85,7 +125,7 @@ on ball-labelled frames are on the labelled ball. Report: `data/outputs/ball_tem
 
 ## 2026-10-15: ball temporal plan step 4, test gates 1-3
 
-Tag: `rtx-3090`. Script: `scripts/eval/ball_det/eval_ball_temporal.py`. 15 test sequences, 15 px
+Tag: `rtx-3090`. Script: `scripts/ball_eval/eval_ball_temporal.py`. 15 test sequences, 15 px
 centre match, main detector from the step 1 cache (imgsz 1280, conf >= 0.15; the plan's gate 1
 names the 416 runtime scale, so this baseline is the stronger one). System simulated frame by
 frame: specialist runs only when main misses, on a window centred on the last sighting, for up
@@ -245,9 +285,9 @@ with yet.
 
 | Artifact | Status |
 |---|---|
-| `scripts/export_athlete_detector.py` | working; both variants exported |
-| `scripts/build_trt_engine.py` | written; **unverified** (no GPU) — exits 2 with an actionable message |
-| `scripts/parity_gate.py` | working |
+| `scripts/path_b/detector/export_athlete_detector.py` | working; both variants exported |
+| `scripts/path_b/detector/build_trt_engine.py` | written; **unverified** (no GPU) — exits 2 with an actionable message |
+| `scripts/path_b/detector/parity_gate.py` | working |
 | `gsr_pipeline/runtime/{postprocess,ort_runner,trt_runner,backend}.py` | tiers 2–3 working; tier 1 unverified |
 | `gsr_pipeline/detect_athlete.py` (`AthleteBallDetector`) | working |
 | `evaluate_detection.py` 2-class mode, `--start_frame`, `--backend` | working |
@@ -314,7 +354,7 @@ The reference side runs at the **training config's** `iou=0.7`, `max_det=300`, n
 `detect.py`'s Path A `iou_threshold=0.45`. Scoring against the wrong NMS setting would have
 measured the setting rather than the runner.
 
-**Box-for-box, 5 sequences, rectangular 736×1280, ORT CPU** (`scripts/parity_gate.py`;
+**Box-for-box, 5 sequences, rectangular 736×1280, ORT CPU** (`scripts/path_b/detector/parity_gate.py`;
 thresholds min IoU ≥ 0.99, max conf delta ≤ 0.01, zero count or class disagreements):
 
 | Sequence | boxes | count mismatches | min IoU | max conf delta | class disagreements |
@@ -360,7 +400,7 @@ double-suppress), ONNX/sidecar checksum drift, missing sidecar, unknown output l
 
 ### Not done — carried to Phase 1b (needs a CUDA host)
 
-1. Build a TensorRT engine and run `scripts/build_trt_engine.py` for real.
+1. Build a TensorRT engine and run `scripts/path_b/detector/build_trt_engine.py` for real.
 2. Parity gate on tier 1 (TRT FP16) and tier 2 (ORT GPU). **FP16 is the one still-open
    accuracy risk**: it is the first thing that would damage ball recall, and it is
    completely unmeasured. Tier 3 parity says nothing about it.

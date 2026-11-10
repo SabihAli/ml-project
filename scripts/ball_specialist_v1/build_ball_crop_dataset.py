@@ -18,7 +18,7 @@ so it runs on Kaggle as is. Needs numpy, opencv-python, pyyaml.
 Source: --src is searched recursively for sequence folders (Labels-GameState.json + img1/)
 or, failing that, for the split zips (train.zip / valid.zip), read without extracting.
 
-    python scripts/build_ball_crop_dataset.py --src /kaggle/input/datasets/sabihalii/soccernetgsr \
+    python scripts/ball_specialist_v1/build_ball_crop_dataset.py --src /kaggle/input/datasets/sabihalii/soccernetgsr \
         --out /kaggle/working/ball_crops --workers 4
 """
 

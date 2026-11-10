@@ -4,7 +4,7 @@ path_b_eval.py -- one-shot Path B evaluation runner (Kaggle / any CUDA host).
 Runs every Path B measurement we can make today over a set of SoccerNet-GSR sequences and
 writes one summary:
 
-  parity      GPU-tier parity gate (scripts/parity_gate.py) per backend: ort_gpu, tensorrt.
+  parity      GPU-tier parity gate (scripts/path_b/detector/parity_gate.py) per backend: ort_gpu, tensorrt.
   detection   per-class detector accuracy (evaluate_detection, 2-class mode), pooled over all
               sequences; optionally against the Ultralytics .pt reference (plan 3.5 gate).
   roles       role/team classifier accuracy on GT boxes + GT pitch positions
@@ -211,13 +211,13 @@ def run_parity(args, seq_dirs, out_dir: Path) -> dict:
     result = {"sequences": [d.name for d in ordered], "backends": {}}
     if args.build_trt and "tensorrt" in args.parity_backends:
         print("\n=== building the TensorRT engine ===", flush=True)
-        rc = subprocess.run([sys.executable, "scripts/build_trt_engine.py"], cwd=ROOT).returncode
+        rc = subprocess.run([sys.executable, "scripts/path_b/detector/build_trt_engine.py"], cwd=ROOT).returncode
         result["trt_build_returncode"] = rc
 
     for backend in args.parity_backends:
         out_json = out_dir / f"parity_{backend}.json"
         print(f"\n=== parity gate: {backend} ===", flush=True)
-        cmd = [sys.executable, "scripts/parity_gate.py",
+        cmd = [sys.executable, "scripts/path_b/detector/parity_gate.py",
                "--frames_per_sequence", str(args.parity_frames), "--backend", backend,
                "--device", args.device, "--weights", args.weights,
                "--output_json", str(out_json), "--sequences", *[str(d) for d in ordered]]
@@ -918,7 +918,7 @@ def parse_args():
     p.add_argument("--role_fit_frames", type=int, default=250, help="roles stage: fit window (evaluate_athlete_roles)")
     p.add_argument("--parity_backends", nargs="*", default=["ort_gpu"], choices=["tensorrt", "ort_gpu", "ort_cpu"])
     p.add_argument("--parity_frames", type=int, default=30)
-    p.add_argument("--build_trt", action="store_true", help="run scripts/build_trt_engine.py before the tensorrt parity")
+    p.add_argument("--build_trt", action="store_true", help="run scripts/path_b/detector/build_trt_engine.py before the tensorrt parity")
     p.add_argument("--latency_warmup", type=int, default=3,
                    help="latency: frames dropped from the start of each sequence before computing percentiles")
     p.add_argument("--profile_frames", type=int, default=40,

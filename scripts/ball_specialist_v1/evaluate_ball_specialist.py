@@ -16,10 +16,10 @@ Stages (all on the 15 held-out test sequences):
 `main` and `fuse` take --shard i --nshards n, so two processes can split the sequences across
 both T4s. Results are cached per sequence in --cache; finished sequences are skipped.
 
-    python scripts/evaluate_ball_specialist.py main  --src SRC --cache /kaggle/working/eval --main_weights kit/best.pt --device 0 --shard 0 --nshards 2
-    python scripts/evaluate_ball_specialist.py fuse  --src SRC --cache /kaggle/working/eval --spec_weights runs/s_baseline/weights/best.pt --tag s_baseline --device 0
-    python scripts/evaluate_ball_specialist.py report --cache /kaggle/working/eval --tag s_baseline
-    python scripts/evaluate_ball_specialist.py crops --data /kaggle/working/ball_crops --spec_weights ... --device 0
+    python scripts/ball_specialist_v1/evaluate_ball_specialist.py main  --src SRC --cache /kaggle/working/eval --main_weights kit/best.pt --device 0 --shard 0 --nshards 2
+    python scripts/ball_specialist_v1/evaluate_ball_specialist.py fuse  --src SRC --cache /kaggle/working/eval --spec_weights runs/s_baseline/weights/best.pt --tag s_baseline --device 0
+    python scripts/ball_specialist_v1/evaluate_ball_specialist.py report --cache /kaggle/working/eval --tag s_baseline
+    python scripts/ball_specialist_v1/evaluate_ball_specialist.py crops --data /kaggle/working/ball_crops --spec_weights ... --device 0
 """
 
 from __future__ import annotations

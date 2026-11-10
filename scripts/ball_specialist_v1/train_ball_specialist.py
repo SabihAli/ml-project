@@ -9,15 +9,15 @@ stay freshly initialised). This works for both single-GPU and DDP runs: in DDP t
 processes rebuild the model from the yaml and reload the same weights via `pretrained`.
 
 Baseline, both T4s (DDP):
-    python scripts/train_ball_specialist.py --data /kaggle/working/ball_crops/dataset.yaml \
+    python scripts/ball_specialist_v1/train_ball_specialist.py --data /kaggle/working/ball_crops/dataset.yaml \
         --weights /kaggle/working/kit/best.pt --device 0,1 --batch 64 --name s_baseline
 
 Two ablations in parallel, one per GPU:
-    python scripts/train_ball_specialist.py ... --device 0 --batch 32 --model yolo26s-p2.yaml --name s_p2 &
-    python scripts/train_ball_specialist.py ... --device 1 --batch 32 --model yolo26n.yaml   --name n_base &
+    python scripts/ball_specialist_v1/train_ball_specialist.py ... --device 0 --batch 32 --model yolo26s-p2.yaml --name s_p2 &
+    python scripts/ball_specialist_v1/train_ball_specialist.py ... --device 1 --batch 32 --model yolo26n.yaml   --name n_base &
 
 Resume after a Kaggle session ended:
-    python scripts/train_ball_specialist.py --resume /kaggle/working/runs/s_baseline/weights/last.pt
+    python scripts/ball_specialist_v1/train_ball_specialist.py --resume /kaggle/working/runs/s_baseline/weights/last.pt
 """
 
 from __future__ import annotations

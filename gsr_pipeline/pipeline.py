@@ -6,8 +6,8 @@ end-to-end process, batch (`process_sequence`) or live (`process_stream`).
 
 The detector is the 2-class athlete/ball model (detect_athlete.py). It emits no roles, so roles
 and teams come from kit colour (live_roles.py over athlete_roles.py). The ball is one row per
-frame: the detector's top ball, or the c5c specialist's when the detector missed
-(ball_specialist.py). Path A (the 4-class YOLOv8n) is in archive/path_a/.
+frame: the detector's first plausible ball (ball_gate.py), or the c5c specialist's when there
+is none (ball_specialist.py). Path A (the 4-class YOLOv8n) is in archive/path_a/.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from gsr_pipeline.athlete_roles import torso_descriptor
+from gsr_pipeline.ball_gate import GateParams
 from gsr_pipeline.ball_specialist import BallFuser, BallSpecialist
 from gsr_pipeline.calibrate import NBJWKeypointDetector, project_detections
 from gsr_pipeline.calibration_live import LiveCalibrator
@@ -116,8 +117,10 @@ class GSRPipeline:
     def _new_ball_fuser(self) -> BallFuser:
         """Fresh per-sequence/per-stream ball state (frame ring, last sighting)."""
         c = self.cfg.get("ball_specialist", {})
+        g = c.get("gate") or {}
         return BallFuser(self.ball_specialist, threshold=c.get("threshold"),
-                         max_miss_frames=c.get("max_miss_frames", 15))
+                         max_miss_frames=c.get("max_miss_frames", 15),
+                         gate=GateParams(**g) if g else None)
 
     def _new_live_roles(self) -> LiveAthleteRoles:
         c = self.cfg.get("live_roles", {})

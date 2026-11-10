@@ -1,6 +1,6 @@
 """BallFuser's state machine and the specialist artifact contract, with a fake specialist (no
 model, no GPU). The fuser must behave like the evaluator's fused chain
-(scripts/eval/ball_det/eval_ball_temporal.py `simulate`), since that is what gate 3 measured."""
+(scripts/ball_eval/eval_ball_temporal.py `simulate`), since that is what gate 3 measured."""
 
 import json
 from types import SimpleNamespace
@@ -111,7 +111,7 @@ def test_specialist_hit_recentres_the_window_and_resets_the_gap():
     cx = hit["bbox_ltrb"][0] + 10
     cy = hit["bbox_ltrb"][1] + 10
     assert spec.calls[1][1:] == clamp_window(cx, cy, W, H, 640)
-    assert fuser.stats == {"main": 1, "specialist_calls": 2, "specialist_hits": 1}
+    assert fuser.stats == {"main": 1, "specialist_calls": 2, "specialist_hits": 1, "gate_rejects": 0}
 
 
 def test_specialist_stops_after_max_miss_frames():

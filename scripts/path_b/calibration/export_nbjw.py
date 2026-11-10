@@ -18,9 +18,9 @@ pitch-position error in metres between the resulting homographies over a grid of
 on the visible pitch.
 
 Usage:
-    python scripts/export_nbjw.py                                    # export both ONNX
-    python scripts/export_nbjw.py --build_engine                     # + TRT FP16 (GPU host)
-    python scripts/export_nbjw.py --skip_export --check ort_cpu --frames 10
+    python scripts/path_b/calibration/export_nbjw.py                                    # export both ONNX
+    python scripts/path_b/calibration/export_nbjw.py --build_engine                     # + TRT FP16 (GPU host)
+    python scripts/path_b/calibration/export_nbjw.py --skip_export --check ort_cpu --frames 10
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from pathlib import Path
 
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 OPSET = 17

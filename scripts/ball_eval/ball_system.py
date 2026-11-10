@@ -30,8 +30,8 @@ from typing import Optional
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[3]
-for p in (ROOT / "scripts" / "ball_temporal", ROOT / "scripts" / "eval" / "ball_det", ROOT / "gsr_pipeline"):
+ROOT = Path(__file__).resolve().parents[2]
+for p in (ROOT / "scripts" / "ball_temporal", ROOT / "scripts" / "ball_eval", ROOT / "gsr_pipeline"):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 import ball_tracker as bt  # noqa: E402  (plain module import: no gsr_pipeline package init)

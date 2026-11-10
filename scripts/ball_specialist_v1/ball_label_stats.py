@@ -3,7 +3,7 @@
 Reads only Labels-GameState.json from each split zip (no extraction). Numbers back
 docs/path_b/plans/BALL_TEMPORAL_PLAN.md section 1.
 
-    python scripts/ball_label_stats.py ../SoccerNetGS/gamestate-2024/valid.zip ../SoccerNetGS/gamestate-2024/train.zip
+    python scripts/ball_specialist_v1/ball_label_stats.py ../SoccerNetGS/gamestate-2024/valid.zip ../SoccerNetGS/gamestate-2024/train.zip
 """
 import json, sys, zipfile, numpy as np
 from collections import defaultdict

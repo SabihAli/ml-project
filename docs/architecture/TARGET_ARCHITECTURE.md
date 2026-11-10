@@ -599,7 +599,7 @@ Recorded in the sources, not settled yet:
 | area | today | target |
 |---|---|---|
 | detector | 2-class ONNX through `runtime/` with tier fallback; TensorRT engine for the detector not yet measured | same, TensorRT FP16 verified |
-| ball | `c5c` plus `BallFuser` (window at the last sighting) inline after the detector; ~69.5% recall | `BallTracker` + specialist on its own stream; > 80% |
+| ball | `c5c` plus `BallFuser` (window at the last sighting) inline after the detector, plausibility gate on detector balls; ~76.3% recall (2026-11-10) | `BallTracker` + specialist on its own stream; > 80% |
 | roles and teams | `live_roles.py`: buffer 250 frames, fit once, running vote | provisional fit from frame 1, refits, lock, half-time flip, GPU descriptors |
 | live pipeline | `process_stream` on one thread, DataFrames | S0–S3 threads, NVDEC, frame ring, `FrameDetections` |
 | calibration | `LiveCalibrator`, K = 5, inline or async | same, gated on several sequences; implausible projections dropped |

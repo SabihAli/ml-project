@@ -13,7 +13,7 @@ c5d specialist) on a Kaggle notebook, end to end, from one generated notebook.
 2. **Generate the notebook** from the repo (after any change to a kit file, regenerate):
 
    ```bash
-   python scripts/kaggle/build_ball_notebook.py
+   python scripts/ball_improvement/build_ball_notebook.py
    ```
 
    This writes `notebooks/kaggle_ball_improvement.ipynb`. The code travels inside it as

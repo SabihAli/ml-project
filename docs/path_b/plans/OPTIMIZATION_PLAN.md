@@ -103,7 +103,7 @@ hazards in their own right.
 - ⚠ This changes outputs (it fixes them). Keep it as a separate commit and record the
   GS-HOTA delta so it is not confused with Phase 1–3 "exact" changes.
 
-**0.4 Parity harness** (new: `scripts/parity_pipeline.py`, or a mode in `path_b_eval.py`)
+**0.4 Parity harness** (new: `scripts/path_b/calibration/parity_pipeline.py`, or a mode in `path_b_eval.py`)
 - Run the pipeline twice (reference code path and optimized code path) over N frames and
   compare, per frame: detection boxes, track IDs, NBJW keypoint dicts, H (max abs element
   difference after normalisation), `h_source`, and `bbox_pitch`.
@@ -304,8 +304,8 @@ inference time stays within ~10% of its solo time (T4 timeslices, so it will not
 
 - The smoke test ran the detector on **ORT GPU** (17.6 ms inference) because no detector engine
   was built on Kaggle. `select_backend` already supports TensorRT FP16 with sidecar checks.
-- Build: `scripts/build_trt_engine.py` on the T4 (same `tensorrt-cu12<11` pin used for NBJW).
-- **Gate:** the existing parity gate (`scripts/parity_gate.py`, box for box vs the Ultralytics .pt)
+- Build: `scripts/path_b/detector/build_trt_engine.py` on the T4 (same `tensorrt-cu12<11` pin used for NBJW).
+- **Gate:** the existing parity gate (`scripts/path_b/detector/parity_gate.py`, box for box vs the Ultralytics .pt)
   plus per-class detection metrics within noise of ORT FP32 (athlete F1 96.30, ball F1 63.27 on
   the smoke set), then GS-HOTA within 0.3.
 - If FP16 fails the gate on the ball (small objects are the usual FP16 casualty): try keeping the
@@ -475,7 +475,7 @@ else relevant with meaningful adoption.
   - Output-changing in rare cases (an event trigger within 3 frames of the last run now waits).
 - 0.3 `ByteTracker.update` steps the tracker on empty frames (`tests/test_track.py`).
   Output-changing; measure its GS-HOTA delta on the next Kaggle run.
-- 0.4 `scripts/parity_pipeline.py --check nbjw_decode`.
+- 0.4 `scripts/path_b/calibration/parity_pipeline.py --check nbjw_decode`.
 
 **Phase 1** (2026-10-07)
 - `gsr_pipeline/nbjw_fast_decode.py`, used by `NBJWKeypointDetector.decode` when

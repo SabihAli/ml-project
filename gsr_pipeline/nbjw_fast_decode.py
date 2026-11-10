@@ -3,7 +3,7 @@ nbjw_fast_decode.py -- NBJW heatmap decode without the reference's per-frame ove
 (docs/path_b/plans/OPTIMIZATION_PLAN.md, Phase 1).
 
 Drop-in replacements for four functions in nbjw_calib/utils/utils_heatmap.py, which stays
-untouched so scripts/parity_pipeline.py can compare the two on the same heatmaps:
+untouched so scripts/path_b/calibration/parity_pipeline.py can compare the two on the same heatmaps:
 
   get_keypoints_from_heatmap_batch_maxpool[_l]  -> peaks_kp / peaks_lines
   coords_to_dict                                -> coords_to_dict

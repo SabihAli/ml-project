@@ -30,7 +30,7 @@ Threshold (--rule, chosen on `select`, frozen for `test`):
   main_precision (the first rule): the highest recall whose system precision is >= the main
     detector's own on `select`.
 
-    python scripts/eval/ball_det/eval_ball_temporal.py all --ckpt runs/ball_temporal/c5b/best.pt \
+    python scripts/ball_eval/eval_ball_temporal.py all --ckpt runs/ball_temporal/c5b/best.pt \
         --src data/datasets/SoccerNetGS --out data/outputs/ball_temporal/eval/c5b
 """
 
@@ -47,7 +47,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "ball_temporal"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_ball_temporal_dataset import CROP, clamp_window  # noqa: E402

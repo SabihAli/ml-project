@@ -9,8 +9,8 @@ Works on a SoccerNet-GSR sequence folder (img1/ or images/ of frames), a plain f
 frames, or a video file. Runs on Kaggle or locally; the device is picked automatically.
 
 Usage:
-    python scripts/infer_athlete_video.py --source <path>/SNGS-033
-    python scripts/infer_athlete_video.py --source clip.mp4 --athlete_conf 0.4 --ball_conf 0.10
+    python scripts/path_b/detector/infer_athlete_video.py --source <path>/SNGS-033
+    python scripts/path_b/detector/infer_athlete_video.py --source clip.mp4 --athlete_conf 0.4 --ball_conf 0.10
 
 Needs ultralytics>=8.4.0 (YOLO26).
 """
@@ -25,7 +25,7 @@ from typing import Iterator, List, Tuple
 import cv2
 import numpy as np
 
-DEFAULT_WEIGHTS = Path(__file__).resolve().parent.parent / "runs" / "yolo26s_athlete_ball" / "best.pt"
+DEFAULT_WEIGHTS = Path(__file__).resolve().parents[2] / "runs" / "yolo26s_athlete_ball" / "best.pt"
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
 ATHLETE_COLOR = (0, 90, 255)   # BGR -> orange-red
 BALL_COLOR = (0, 255, 255)     # BGR -> yellow

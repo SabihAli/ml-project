@@ -232,7 +232,7 @@ budget covers NMS).
 Decided 2026-09-25. TRT engines are specific to GPU model, driver and TRT version, so they
 can't be shipped prebuilt.
 
-- *Release (dev machine, once per model version):* `scripts/export_athlete_detector.py`
+- *Release (dev machine, once per model version):* `scripts/path_b/detector/export_athlete_detector.py`
   exports `best.pt` → `best_<h>x<w>.onnx` (pinned opset, static shape, `simplify=True`). It
   writes `best_<h>x<w>.onnx.json` with class names, input size, stride, the output tensor
   layout, and a checksum.
@@ -254,7 +254,7 @@ can't be shipped prebuilt.
   true). The build writes temporary files and renames them when done, so a killed build leaves
   no engine; a `.building` lock stops two processes building at once (the second falls back a
   tier). Without TensorRT installed, or with auto-build off, a missing engine still means
-  falling back to ORT GPU. `scripts/build_trt_engine.py` remains for building ahead of time.
+  falling back to ORT GPU. `scripts/path_b/detector/build_trt_engine.py` remains for building ahead of time.
 - *Startup:* on a sidecar mismatch, **refuse the engine**, log at ERROR that
   `build_trt_engine.py` must be re-run, and continue on ORT GPU. Auto-build covers only a
   *missing* engine: a mismatched one is never overwritten automatically.
@@ -558,7 +558,7 @@ it was not the networks: `NBJWHomography.compute` ran NBJW's `heuristic_voting` 
 `cv2.calibrateCamera` fits on the CPU) every frame, only to fill the `camera_parameters`
 passthrough. Built:
 - `calibration.compute_cam_params` (default false) gates that voting.
-- Item 1: `scripts/export_nbjw.py` (ONNX export, `--build_engine` for TRT FP16, `--check` parity
+- Item 1: `scripts/path_b/calibration/export_nbjw.py` (ONNX export, `--build_engine` for TRT FP16, `--check` parity
   in metres). `NBJWKeypointDetector` takes `backend` torch | auto | tensorrt | ort_gpu | ort_cpu,
   and preprocessing runs on the device instead of PIL. Export and ORT CPU parity are verified on
   the dev machine. The TRT engine build and the GPU timings are **unverified** (no CUDA here).
@@ -578,7 +578,7 @@ passthrough. Built:
   (p95 128.8 ms on frames that run NBJW). The FP16 projection gate (item 1) and the
   multi-sequence propagation gate (item 3) have not been run yet.
 
-1. **NBJW on TensorRT.** `scripts/export_nbjw.py` exports both NBJW torch models to ONNX at the
+1. **NBJW on TensorRT.** `scripts/path_b/calibration/export_nbjw.py` exports both NBJW torch models to ONNX at the
    input size NBJW uses. The install step builds FP16 engines with the same
    `build_trt_engine.py`, and they run through `trt_runner.py` with GPU preprocessing from the
    frame-ring slot. The vendored `nbjw_calib` package is **not edited**: the runner replaces
@@ -853,7 +853,7 @@ Each item: check with `grep` that nothing outside this list still uses it, then 
 | `gsr_pipeline/validate_process_stream.py` | Path A live checks; rewritten for the new live pipeline |
 | `configs/default.yaml`: `detector`, `team`, `team_live` sections | Path A settings |
 | `notebooks/kaggle_apply_latency_patch.py` | one-off Kaggle patch, already applied |
-| `scripts/build_ball_crop_dataset.py`, `train_ball_specialist.py`, `evaluate_ball_specialist.py`, `snap_ball_labels.py` | the scratched v1 ball specialist (`BALL_TEMPORAL_PLAN.md` §1) |
+| `scripts/ball_specialist_v1/build_ball_crop_dataset.py`, `train_ball_specialist.py`, `evaluate_ball_specialist.py`, `snap_ball_labels.py` | the scratched v1 ball specialist (`BALL_TEMPORAL_PLAN.md` §1) |
 | `gsr_pipeline/subset_dataset.py`, `rename_img1_to_images.py` | one-off dataset utilities; delete unless still needed |
 
 #### 9.4 Rename: no more "Path B"
@@ -919,7 +919,7 @@ New:
   `athlete_roles_live.py`, `ball_crop.py`, `ball_specialist.py`, `ball_tracker.py`,
   `serialize.py`
 - `gsr_pipeline/detect_athlete.py`, `gsr_pipeline/perf.py`
-- `scripts/export_athlete_detector.py`, `scripts/export_nbjw.py`, `scripts/build_trt_engine.py`,
+- `scripts/path_b/detector/export_athlete_detector.py`, `scripts/path_b/calibration/export_nbjw.py`, `scripts/path_b/detector/build_trt_engine.py`,
   `scripts/perf_report.py`
 - `tests/`, `requirements-dev.txt`, `docs/path_b/PERF_LOG.md`
 

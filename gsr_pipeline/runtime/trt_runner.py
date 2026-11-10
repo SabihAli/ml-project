@@ -4,7 +4,7 @@ trt_runner.py -- TensorRT backend (tier 1) and the engine builder behind it.
 TensorRT engines are specific to the GPU model, driver and TRT version, so they cannot be
 shipped. The ONNX is the shipped artifact; each production host builds its own engine on
 first install (IMPLEMENTATION_PLAN.md section 3.2). `build_engine` here is what
-scripts/build_trt_engine.py drives, and `ensure_engine` is what the pipeline calls at startup:
+scripts/path_b/detector/build_trt_engine.py drives, and `ensure_engine` is what the pipeline calls at startup:
 it builds the engine automatically when the file is missing (first launch on a host).
 
 Every engine gets a sidecar recording the environment it was built for. At startup a
@@ -205,7 +205,7 @@ def ensure_engine(
     if not auto_build:
         raise FileNotFoundError(
             f"no engine at {engine_path.name} and auto-build is off; "
-            "run scripts/build_trt_engine.py on this host"
+            "run scripts/path_b/detector/build_trt_engine.py on this host"
         )
     if not torch.cuda.is_available():
         raise RuntimeError("no CUDA device; cannot build a TensorRT engine")

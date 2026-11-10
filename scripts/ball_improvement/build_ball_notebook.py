@@ -7,7 +7,7 @@ The notebook carries the code as %%writefile cells (one per kit file, written to
 data and two checkpoints. Regenerate after any change to a kit file; the notebook's first cell
 records the git commit and every file's sha256, so a stale notebook is visible.
 
-    python scripts/kaggle/build_ball_notebook.py            # -> notebooks/kaggle_ball_improvement.ipynb
+    python scripts/ball_improvement/build_ball_notebook.py            # -> notebooks/kaggle_ball_improvement.ipynb
 """
 
 from __future__ import annotations
@@ -31,9 +31,9 @@ KIT_FILES = [
     "scripts/ball_temporal/build_ball_temporal_dataset.py",
     "scripts/ball_temporal/train_ball_temporal.py",
     "scripts/ball_temporal/export_ball_specialist.py",
-    "scripts/eval/ball_det/eval_ball_temporal.py",
-    "scripts/eval/ball_det/ball_system.py",
-    "scripts/eval/ball_det/diagnose_ball_misses.py",
+    "scripts/ball_eval/eval_ball_temporal.py",
+    "scripts/ball_eval/ball_system.py",
+    "scripts/ball_eval/diagnose_ball_misses.py",
     "gsr_pipeline/ball_tracker.py",
     "notebooks/kaggle/ball_pipeline.py",
 ]
@@ -196,7 +196,7 @@ def build(out: Path):
     for rel in KIT_FILES:
         p = ROOT / rel
         files.append((rel, p.read_text(encoding="utf-8"), hashlib.sha256(p.read_bytes()).hexdigest()[:12]))
-    stamp = (f"Generated {datetime.now():%Y-%m-%d %H:%M} by `scripts/kaggle/build_ball_notebook.py` from commit "
+    stamp = (f"Generated {datetime.now():%Y-%m-%d %H:%M} by `scripts/ball_improvement/build_ball_notebook.py` from commit "
              f"`{git_commit()}`.\n\n| kit file | sha256 |\n|---|---|\n"
              + "\n".join(f"| `{rel}` | `{h}` |" for rel, _, h in files))
     dirs = sorted({Path(r).parent.as_posix() for r in KIT_FILES})

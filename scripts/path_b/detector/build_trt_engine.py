@@ -14,8 +14,8 @@ NOTE (2026-09-26): unverified. The dev machine has no NVIDIA GPU (plan section 1
 so this is Phase 1b work, to be run and confirmed on a CUDA host.
 
 Usage:
-    python scripts/build_trt_engine.py
-    python scripts/build_trt_engine.py --onnx runs/yolo26s_athlete_ball/best_1280x1280.onnx --fp32
+    python scripts/path_b/detector/build_trt_engine.py
+    python scripts/path_b/detector/build_trt_engine.py --onnx runs/yolo26s_athlete_ball/best_1280x1280.onnx --fp32
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ import logging
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 DEFAULT_ONNX = REPO_ROOT / "runs" / "yolo26s_athlete_ball" / "best_736x1280.onnx"

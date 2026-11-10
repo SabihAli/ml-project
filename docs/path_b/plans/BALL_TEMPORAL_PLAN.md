@@ -69,7 +69,7 @@ What that means for the new design:
 ## 2. Ground truth facts the design uses (measured 2026-10-11)
 
 Source: every `Labels-GameState.json` in `SoccerNetGS/gamestate-2024/{train,valid}`.
-Reproduce with `python scripts/ball_label_stats.py <valid.zip> <train.zip>`.
+Reproduce with `python scripts/ball_specialist_v1/ball_label_stats.py <valid.zip> <train.zip>`.
 
 | | train | valid |
 |---|---|---|
@@ -280,7 +280,7 @@ Gate 3 also reports specialist recall per gap since the last sighting, which set
 | 1 | main-detector cache, `scripts/ball_temporal/cache_main_detections.py` (**built**; guides: `docs/guides/BALL_TEMPORAL_GUIDE.md`, `BALL_TEMPORAL_KAGGLE_GUIDE.md`) | local RTX 3090 or Kaggle 2×T4 | all 115 sequences cached; summary table recorded. **Done 2026-10-13**, local RTX 3090; see the 2026-10-13 entry in `docs/path_b/PERF_LOG.md` |
 | 2 | `build_ball_temporal_dataset.py` | local smoke test, then Kaggle | spot-check by eye; hard-frame count recorded. **Done 2026-10-13** (`scripts/ball_temporal/build_ball_temporal_dataset.py`, local); see the 2026-10-13 step 2 entry in `docs/path_b/PERF_LOG.md` |
 | 3 | heatmap model + training script | local smoke test, then Kaggle DDP | first run trained, curves saved. **Done 2026-10-15** (local, single RTX 3090): `runs/ball_temporal/c9b`, `c5b`; see the 2026-10-15 entry in `docs/path_b/PERF_LOG.md` |
-| 4 | evaluator support for point models in `crops` and `fuse`; 5-ch vs 9-ch | Kaggle | gates 1–3 in a dated `PERF_LOG.md` entry. **Measured 2026-10-15** (local, `scripts/eval/ball_det/eval_ball_temporal.py`): gate 1 pass; gate 3 pass for `c9b`, `c5b` short by 0.8 points under the `select` threshold rule; see `PERF_LOG.md` |
+| 4 | evaluator support for point models in `crops` and `fuse`; 5-ch vs 9-ch | Kaggle | gates 1–3 in a dated `PERF_LOG.md` entry. **Measured 2026-10-15** (local, `scripts/ball_eval/eval_ball_temporal.py`): gate 1 pass; gate 3 pass for `c9b`, `c5b` short by 0.8 points under the `select` threshold rule; see `PERF_LOG.md` |
 | 4b | `select`-only system threshold rule, re-run gate 3 for `c5b` (a second look, §10 item 14) | local | gate 3 re-reported. **Done 2026-10-15**: the new rule also picks 0.75; gate 3 still fails by 0.8 points (+9.2 recall, +1.2 precision); see `PERF_LOG.md` |
 | 4c | retrain `c5c`: GSR `test` sequences added to `pool` (§10 item 15), motion blur (item 16); gates re-run with the fixed `spec_precision` rule | local | gate 3 measured for `c5c`. **Done 2026-10-16:** gate 3 **PASS** (+10.1 recall, +1.2 precision, threshold 0.70 from `select`); see `PERF_LOG.md` |
 | 5 | export, parity, runtime contract change to points | Kaggle or local 3090 | gate 4 passes. **Partly done 2026-10-15:** `scripts/ball_temporal/export_ball_specialist.py` (ONNX + sidecar, parity vs PyTorch on ORT CPU: PASS, max point diff 0.0000 px); the pipeline builds missing TensorRT engines at startup (`trt_runner.ensure_engine`). TensorRT timing deferred (§10 item 17) |
@@ -310,7 +310,7 @@ and `test` stay intact; motion blur is in (item 16); copy-paste is still deferre
    detector never trained on (`pool`). 10 non-test `valid` sequences (`select`) are held back
    for model selection (§3).
 10. **This phase's scripts live in `scripts/ball_temporal/`** (user, 2026-10-12), standalone,
-    so the v1 scripts aren't needed. Evaluators live in `scripts/eval/ball_det/` (user, 2026-10-15).
+    so the v1 scripts aren't needed. Evaluators live in `scripts/ball_eval/` (user, 2026-10-15).
 11. **`outside` crops out of training** (measured, 2026-10-14). Windows centred on a main-detector
     sighting often hold a real but unlabelled ball (a spare ball by the boards); labelled empty,
     they taught the first runs (`c9`, `c5`) to ignore real balls. Those runs are superseded.

@@ -12,8 +12,9 @@ official GS-HOTA metric. How it works and how well: `docs/architecture/GSR_PIPEL
 The pipeline is **Path B** (since 2026-10-25, batch and live):
 - a 2-class YOLO26s athlete/ball detector (`runs/yolo26s_athlete_ball/`);
 - the temporal ball specialist **c5c** (`runs/ball_temporal/c5c/`) on frames where the detector
-  missed the ball: on the 15 held-out test sequences, ball recall 59.4% → 69.5%, precision
-  85.3% → 86.5%;
+  missed the ball (or its ball failed the plausibility gate, `gsr_pipeline/ball_gate.py`): on the 15
+  held-out test sequences, ball recall 59.4% → 76.3%, precision 85.3% → 90.2%
+  (`docs/results/PIPELINE_IMPROVEMENT_1_PHASE1.md`);
 - roles and teams from kit colour (`gsr_pipeline/live_roles.py`).
 
 Status per phase: `docs/path_b/plans/IMPLEMENTATION_PLAN.md` §12.1. The old 4-class YOLOv8n
@@ -71,10 +72,10 @@ for the Path B detector, and `--start_frame 168` to skip SNGS-021's kickoff.
 ### Path B tools
 
 ```bash
-python scripts/export_athlete_detector.py          # ONNX export (ultralytics>=8.4.0)
-python scripts/build_trt_engine.py                 # TensorRT engine ahead of time (optional: the pipeline
+python scripts/path_b/detector/export_athlete_detector.py          # ONNX export (ultralytics>=8.4.0)
+python scripts/path_b/detector/build_trt_engine.py                 # TensorRT engine ahead of time (optional: the pipeline
                                                    # builds a missing engine itself on first launch)
-python scripts/parity_gate.py --frames_per_sequence 30 --backend ort_cpu --device cpu
+python scripts/path_b/detector/parity_gate.py --frames_per_sequence 30 --backend ort_cpu --device cpu
 python notebooks/path_b_eval.py --data_root <valid dir> --output_dir <out> --limit 3 --max_frames 100   # CUDA host
 ```
 
@@ -155,9 +156,13 @@ gsr_pipeline/          the pipeline: stages, live path, Path B runtime (runtime/
   configs/default.yaml   all runtime settings
   nbjw_calib/            vendored calibration package (own setup.py)
 api/                   FastAPI HTTP + WS service
-scripts/               export, TensorRT, parity, training and inference tools
+scripts/               tools grouped by plan/task (scripts/README.md)
+  path_b/                detector + calibration export, TensorRT, parity, training, inference
   ball_temporal/         ball specialist scripts (current): cache, dataset, model, training
-  eval/ball_det/         ball specialist evaluation (test gates)
+  ball_eval/             ball system evaluation: gates, tracker sim, miss diagnosis
+  ball_improvement/      BALL_IMPROVEMENT_PLAN Kaggle notebook builder
+  pipeline_improvement_1/  PIPELINE_IMPROVEMENT_PLAN_1 phase scripts
+  ball_specialist_v1/    superseded v1 specialist (record)
 notebooks/path_b_eval.py   Path B end-to-end evaluation runner
 tests/                 pytest, pure logic
 docs/                  see Documentation

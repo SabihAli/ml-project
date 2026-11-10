@@ -345,14 +345,14 @@ Record each finished run (best epoch, select recall overall/hard/easy, wall time
 
 ## 5d. Step 4: test gates 1–3
 
-Script: `scripts/eval/ball_det/eval_ball_temporal.py`. It scores a checkpoint on the step 2 test
+Script: `scripts/ball_eval/eval_ball_temporal.py`. It scores a checkpoint on the step 2 test
 crops (gates 1–2) and replays every frame of the `select` and `test` sequences as the runtime runs
 it (gate 3): the specialist runs only when the main detector misses, on a window centred on the
 last sighting, for up to 15 frames. The system threshold is chosen on `select` and frozen for
 `test`. A few minutes per checkpoint on the RTX 3090.
 
 ```bash
-python scripts/eval/ball_det/eval_ball_temporal.py all --ckpt runs/ball_temporal/c5b/best.pt --src data/gsr --out data/outputs/ball_temporal/eval/c5b
+python scripts/ball_eval/eval_ball_temporal.py all --ckpt runs/ball_temporal/c5b/best.pt --src data/gsr --out data/outputs/ball_temporal/eval/c5b
 ```
 
 - Output: `report.md` (gate tables, recall by frames since the last sighting, the `select`

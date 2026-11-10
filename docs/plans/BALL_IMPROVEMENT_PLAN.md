@@ -3,15 +3,15 @@
 Status (2026-10-25): **approved; items 1–3 built, not yet run.** Four build items, run in order.
 Items 1 and 2 need no retraining and run on existing caches. Items 3 and 4 need the RTX 3090 or
 Kaggle. **Items 1–3 run on Kaggle** from one generated notebook: `docs/guides/BALL_IMPROVEMENT_KAGGLE_GUIDE.md`
-(runner `notebooks/kaggle/ball_pipeline.py`, notebook built by `scripts/kaggle/build_ball_notebook.py`).
+(runner `notebooks/kaggle/ball_pipeline.py`, notebook built by `scripts/ball_improvement/build_ball_notebook.py`).
 Item 4 waits for item 1's numbers (user, 2026-10-25).
 
 **Built as (2026-10-25), and where it differs from the text below:**
-- Item 1: `scripts/eval/ball_det/diagnose_ball_misses.py`; camera motion offline from
+- Item 1: `scripts/ball_eval/diagnose_ball_misses.py`; camera motion offline from
   `scripts/ball_temporal/camera_motion_cache.py` (masks GT people, not detections: slightly
   cleaner than the runtime).
 - Item 2: `gsr_pipeline/ball_tracker.py` (pure numpy, `tests/test_ball_tracker.py`); evaluated by
-  `eval_ball_temporal.py track` (`scripts/eval/ball_det/ball_system.py`). The batch path is a
+  `eval_ball_temporal.py track` (`scripts/ball_eval/ball_system.py`). The batch path is a
   dynamic-programming pick over candidates plus camera-compensated interpolation; **RTS smoothing
   is left out** until positions, not picks, are shown to be the problem. **Not wired into
   `GSRPipeline` yet**: that follows gate T.
@@ -84,7 +84,7 @@ PERF_LOG entry, and keep thresholds chosen on `select` only (never on `test`).
 
 ### 2.1 Script
 
-`scripts/eval/ball_det/diagnose_ball_misses.py`, standalone like the other evaluators (imports
+`scripts/ball_eval/diagnose_ball_misses.py`, standalone like the other evaluators (imports
 `scripts/ball_temporal/gsr_io.py` and the evaluator's `simulate`). Inputs:
 
 - the main-detector cache (`cache_main_detections.py` output: up to 5 balls per frame at
@@ -244,7 +244,7 @@ default `last_seen`. Item 3 evaluates `predicted`; the default changes only if i
 
 ### 3.7 Evaluation
 
-New `track` stage in `scripts/eval/ball_det/eval_ball_temporal.py`:
+New `track` stage in `scripts/ball_eval/eval_ball_temporal.py`:
 
 - **Replay mode (CPU):** from the cache and item 1's `spec_outputs.jsonl`. Exact only while
   the window centre is `last_seen` and the specialist's call pattern is unchanged; used for
@@ -378,7 +378,7 @@ Three variants, A/B'd on `select` ball recall, people recall and latency:
 
 ### 5.4 Training script
 
-`scripts/train_yolo26_gsr.py` gains: `--extra_splits` (adds `valid`-non-test-non-select and
+`scripts/path_b/detector/train_yolo26_gsr.py` gains: `--extra_splits` (adds `valid`-non-test-non-select and
 GSR `test` sequences), `--fold A|B` (the §5.1 halves, written to a split file so folds are
 reproducible), `--model_yaml` (for R2), and records the split file and git commit in the run
 directory. Default `--imgsz` changes from 640 to 1280 so the default matches what was actually
@@ -386,9 +386,9 @@ trained.
 
 ### 5.5 Export, runtime and parity
 
-- `scripts/export_athlete_detector.py --imgsz 1088 1920` for R1 (the script takes height then
-  width), new sidecar, `scripts/build_trt_engine.py`, then the parity gate
-  (`scripts/parity_gate.py`) on ORT CPU and TensorRT FP16.
+- `scripts/path_b/detector/export_athlete_detector.py --imgsz 1088 1920` for R1 (the script takes height then
+  width), new sidecar, `scripts/path_b/detector/build_trt_engine.py`, then the parity gate
+  (`scripts/path_b/detector/parity_gate.py`) on ORT CPU and TensorRT FP16.
 - `detector.onnx_path` switches only after gate D.
 
 ### 5.6 Knock-on work
@@ -438,8 +438,8 @@ That is a product decision for the user, raised with item 2's results.
 
 | file | change |
 |---|---|
-| `scripts/eval/ball_det/diagnose_ball_misses.py` | new (item 1) |
-| `scripts/eval/ball_det/eval_ball_temporal.py` | save per-frame outputs; `track` stage (item 2) |
+| `scripts/ball_eval/diagnose_ball_misses.py` | new (item 1) |
+| `scripts/ball_eval/eval_ball_temporal.py` | save per-frame outputs; `track` stage (item 2) |
 | `gsr_pipeline/ball_tracker.py` | new (item 2) |
 | `gsr_pipeline/ball_specialist.py` | candidate list out; `window_centre`; multi-window batch (items 2–3) |
 | `gsr_pipeline/pipeline.py` | camera shift into the tracker; batch Viterbi/interpolation pass (item 2) |
@@ -448,6 +448,6 @@ That is a product decision for the user, raised with item 2's results.
 | `scripts/ball_temporal/build_ball_temporal_dataset.py` | `--centre predicted`, gap ≥ 2 oversampling (item 3) |
 | `scripts/ball_temporal/train_ball_temporal.py` | warm start from a checkpoint (item 3) |
 | `scripts/ball_temporal/export_ball_specialist.py` | batch-3 export (item 3) |
-| `scripts/train_yolo26_gsr.py` | `--extra_splits`, `--fold`, `--model_yaml`, default imgsz 1280 (item 4) |
+| `scripts/path_b/detector/train_yolo26_gsr.py` | `--extra_splits`, `--fold`, `--model_yaml`, default imgsz 1280 (item 4) |
 | `docs/path_b/PERF_LOG.md` | one dated entry per item |
 | `docs/path_b/plans/BALL_TEMPORAL_PLAN.md` | link here from its status line |

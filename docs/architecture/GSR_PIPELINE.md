@@ -85,8 +85,9 @@ live. See `STREAMING_ARCHITECTURE.md`.
 - **Roles and teams:** `athlete_roles.py` assigns player/goalkeeper by team, referee or other,
   from torso colour fitted per match plus pitch position.
 - **Ball:** the main detector finds 59% of balls on the held-out test sequences. A temporal
-  specialist (`docs/architecture/BALL_TEMPORAL_ARCH.md`) raises that to 69.5% in simulation; it
-  is trained and evaluated but not wired into the pipeline yet (`docs/path_b/plans/BALL_TEMPORAL_PLAN.md`).
+  specialist (`docs/architecture/BALL_TEMPORAL_ARCH.md`) raises that to 69.5%, and with the detector-ball plausibility gate
+  (`gsr_pipeline/ball_gate.py`) to 76.3% at 90.2% precision; both are wired into the pipeline
+  (`docs/results/PIPELINE_IMPROVEMENT_1_PHASE1.md`).
 
 ---
 
