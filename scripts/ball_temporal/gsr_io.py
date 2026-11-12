@@ -66,14 +66,22 @@ def select_seqs(valid_numbers) -> set[int]:
 
 
 def discover(src: Path) -> list[SeqRef]:
-    """Sequence folders under src, else sequences inside zips under src. One entry per name."""
+    """Sequence folders under src, else sequences inside zips under src. One entry per name.
+    src may list several roots separated by commas (e.g. GSR + converted SoccerNet-Tracking clips)."""
     found: dict[str, SeqRef] = {}
+    for root in str(src).split(","):
+        _discover_root(Path(root), found)
+    return _assign_splits(found)
+
+
+def _discover_root(src: Path, found: dict) -> None:
+    n0 = len(found)
     for lab in sorted(Path(src).rglob("Labels-GameState.json")):
         seq = lab.parent
         gsr = _gsr_split_of(seq.relative_to(src).parts)
         if gsr and seq.name not in found and (seq / "img1").is_dir():
             found[seq.name] = SeqRef(seq.name, gsr, "dir", str(seq), "")
-    if not found:
+    if len(found) == n0:
         for zp in sorted(Path(src).rglob("*.zip")):
             with zipfile.ZipFile(zp) as z:
                 for n in z.namelist():
@@ -84,6 +92,9 @@ def discover(src: Path) -> list[SeqRef]:
                     gsr = _gsr_split_of(PurePosixPath(pre).parts) or _gsr_split_of([zp.name])
                     if gsr and name.startswith("SNGS") and name not in found:
                         found[name] = SeqRef(name, gsr, "zip", str(zp), pre)
+
+
+def _assign_splits(found: dict) -> list[SeqRef]:
     sel = select_seqs(r.number for r in found.values() if r.src_split == "valid")
 
     def split_of(r: SeqRef) -> str:

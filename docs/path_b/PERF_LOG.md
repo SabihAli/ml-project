@@ -15,6 +15,16 @@ changed. Numbers from a machine that is not the production host are tagged as su
 
 ---
 
+## 2026-11-12: pipeline improvement plan 1, Phase 3a (replay on every split, mining, multi-peak)
+
+Tag: `kaggle-t4`. `phase3a_mining.ipynb` (`phase3a_mine.py`). Raw: `data/outputs/pipeline_improvement_1/phase3a/`.
+Details: `docs/results/PIPELINE_IMPROVEMENT_1_PHASE3A.md`.
+
+- Phase 1 replayed: train 93.6%, pool 92.2-93.7% (c5c's training clips) vs select 76.8%, test 76.3% recall.
+- Multi-peak c5c selection on test: 76.14% / 90.27% vs Phase 1 76.29% / 90.21%. Reverted; runtime unchanged.
+
+---
+
 ## 2026-11-11: pipeline improvement plan 1, Phase 4 (ball tracker) — reverted
 
 Tag: `kaggle-t4`. `phase4_tracker.ipynb` (`phase4_sweep.py`) and `phase4b_sort.ipynb`

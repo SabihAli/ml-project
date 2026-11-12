@@ -2,7 +2,7 @@
 
 ## Ball Detection: Recall, Robustness, and Real-Time Performance
 
-**Status:** In progress. Phase 0 closed 2026-11-09, Phase 1 closed 2026-11-10, Phase 4 closed 2026-11-11 (reverted: no tracker beat Phase 1); next Phase 3, then 2 -> 5 -> 6 (§5).\
+**Status:** In progress. Phase 0 closed 2026-11-09, Phase 1 closed 2026-11-10, Phase 4 closed 2026-11-11 (reverted: no tracker beat Phase 1); Phase 3 in progress (3a done 2026-11-12: mining + multi-peak, multi-peak reverted; next: latency profile on the RTX 3090, then teacher-student), then 2 -> 5 -> 6 (§5).\
 **Primary objective:** Reach **90%+ ball-detection recall** while
 retaining real-time performance within the existing system's end-to-end
 latency budget.\
@@ -787,6 +787,15 @@ configuration.
 improvement that fits the end-to-end compute budget.
 
 ## Phase 3 --- Improve specialist training and temporal reasoning
+
+**Status: in progress.** 3a done 2026-11-12 (`docs/results/PIPELINE_IMPROVEMENT_1_PHASE3A.md`): the 49 GSR
+`test` clips restored to `pool` on Kaggle (SoccerNet-Tracking test, converted); Phase 1 replayed on every split
+shows seen clips 92-94% recall vs unseen 76-77% (generalisation, not coverage); mining c5c's own training clips
+gives only 1,485 hard positives (cross-fitting needed); multi-peak selection (task 8) REVERTED. Direction
+(2026-11-12, user): a large offline teacher pseudo-labels SoccerNet full matches, distilled into real-time
+students (main detector with 2 frame-difference channels, c5c retrained, cross-fitted mining); training compute is
+not a constraint, inference latency is (§1.4 budget, shared with the future event model). First step: live-path
+latency profile on the RTX 3090 (`scripts/pipeline_improvement_1/phase3/profile_latency.py`).
 
 **Goal:** Make specialist recovery work on realistic, difficult pipeline
 failures.
