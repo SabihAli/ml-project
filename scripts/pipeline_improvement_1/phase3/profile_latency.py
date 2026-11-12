@@ -17,7 +17,7 @@ and compares e2e p95 with the plan's budget (IMPLEMENTATION_PLAN.md §1.4: p95 <
 
     python scripts/pipeline_improvement_1/phase3/profile_latency.py \
         --sequence_dir data/datasets/SoccerNetGS/gamestate-2024/valid/SNGS-021 \
-        --out data/outputs/pipeline_improvement_1/phase3/latency [--frames 600] \
+        --out data/outputs/pipeline_improvement_1/phase3/latency --device cuda:0 --calib_backend auto [--frames 600] \
         [--candidate runs/x/detector_5ch.onnx:1,5,736,1280]
 
 Outputs (--out): latency_report.md, latency.json.
@@ -127,6 +127,10 @@ def main():
     ap.add_argument("--sequence_dir", type=Path, required=True, help="a GSR sequence folder (with img1/)")
     ap.add_argument("--config", type=Path, default=ROOT / "gsr_pipeline" / "configs" / "default.yaml")
     ap.add_argument("--out", type=Path, default=ROOT / "data" / "outputs" / "pipeline_improvement_1" / "phase3" / "latency")
+    ap.add_argument("--device", default="", help="override every model's device, e.g. cuda:0 (default.yaml has "
+                    "calibration on cpu)")
+    ap.add_argument("--calib_backend", default="", help="override calibration.backend: torch | auto | tensorrt | "
+                    "ort_gpu (non-torch needs the NBJW ONNX from scripts/path_b/calibration/export_nbjw.py)")
     ap.add_argument("--frames", type=int, default=600, help="frames timed (after warm-up)")
     ap.add_argument("--warmup", type=int, default=50)
     ap.add_argument("--spec_iters", type=int, default=300)
@@ -139,6 +143,11 @@ def main():
     from gsr_pipeline.pipeline import GSRPipeline
 
     cfg = yaml.safe_load(a.config.read_text())
+    if a.device:                                       # as run.py --device: every model on this device
+        for sec in ("detector", "ball_specialist", "reid", "calibration", "jersey"):
+            cfg.setdefault(sec, {})["device"] = a.device
+    if a.calib_backend:
+        cfg.setdefault("calibration", {})["backend"] = a.calib_backend
     t0 = time.time()
     pipe = GSRPipeline(cfg)
     load_s = time.time() - t0
