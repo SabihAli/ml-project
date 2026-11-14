@@ -146,6 +146,11 @@ def build_engine(
         # advisory only, so a missing attribute means "no information", not "no FP16".
         if getattr(builder, "platform_has_fast_fp16", True) is False:
             log.warning("platform reports no fast FP16; building anyway")
+        if not hasattr(trt.BuilderFlag, "FP16"):
+            # TensorRT 11 dropped weakly-typed FP16 builds; without the flag the engine would be
+            # FP32 and silently slower than everything this runtime was validated with.
+            raise RuntimeError(f"TensorRT {trt.__version__} has no BuilderFlag.FP16 (removed in 11); "
+                               "install TensorRT 10: pip install \"tensorrt-cu12>=10,<11\" (make deps does)")
         config.set_flag(trt.BuilderFlag.FP16)
     try:
         config.builder_optimization_level = 5  # maximum; TensorRT >= 8.6

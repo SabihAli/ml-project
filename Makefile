@@ -20,6 +20,8 @@ PY := .gsr_venv/bin/python
 endif
 
 CUDA_TAG ?= cu124
+# TensorRT 10 for CUDA 12 (matches CUDA_TAG): TensorRT 11 removed weakly-typed FP16 builds (BuilderFlag.FP16)
+TRT_SPEC ?= tensorrt-cu12>=10,<11
 DEVICE   ?= cuda:0
 SPLITS   ?= valid
 SEQ      ?=
@@ -46,8 +48,8 @@ endif
 	$(PY) -m pip install -r requirements.txt
 	$(PY) -m pip install -e gsr_pipeline/nbjw_calib
 ifeq ($(GPU),1)
-	$(PY) -m pip uninstall -y onnxruntime
-	$(PY) -m pip install onnxruntime-gpu tensorrt
+	$(PY) -m pip uninstall -y onnxruntime tensorrt tensorrt_cu13 tensorrt_cu13_libs tensorrt_cu13_bindings
+	$(PY) -m pip install onnxruntime-gpu "$(TRT_SPEC)"
 endif
 
 checkpoints: $(PY)
