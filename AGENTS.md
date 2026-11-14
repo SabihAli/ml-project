@@ -269,7 +269,7 @@ python -m gsr_pipeline.evaluate_detection --path b --backend ort_cpu --device cp
     --sequence_dir data/datasets/SoccerNetGS/gamestate-2024/valid/SNGS-021 --start_frame 168
 ```
 
-**Setup:** the root `Makefile` (`make setup`) creates `.gsr_venv`, installs the dependencies (CUDA torch, `onnxruntime-gpu` and `tensorrt` when `nvidia-smi` finds a GPU), downloads the NBJW checkpoints, exports the NBJW ONNX and, on a GPU, builds every TensorRT engine; `make data` fetches GSR splits into `data/gsr/`. Logic is in `scripts/setup/setup_assets.py`. There is still **no** lint, format, type-check or Docker command — do not invent one. For tests, see the Testing section: a narrow `pytest tests/` suite exists for Path B's runtime logic only.
+**Setup:** the root `Makefile` (`make setup`) creates `.gsr_venv`, installs the dependencies (CUDA torch, `onnxruntime-gpu` and `tensorrt` when `nvidia-smi` finds a GPU), downloads the NBJW checkpoints, exports the NBJW ONNX and, on a GPU, builds every TensorRT engine; `make dataset` (alias `make data`) fetches GSR splits into `data/gsr/` (`SPLITS="train valid test"`). Logic is in `scripts/setup/setup_assets.py`. There is still **no** lint, format, type-check or Docker command — do not invent one. For tests, see the Testing section: a narrow `pytest tests/` suite exists for Path B's runtime logic only.
 
 ## Coding Conventions
 

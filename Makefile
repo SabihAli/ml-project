@@ -1,7 +1,8 @@
 # cv_service setup: dependencies and the gitignored runtime assets of a fresh checkout.
 #
 #   make setup      venv + dependencies + calibration checkpoints + exports (TensorRT engines if a GPU is found)
-#   make data       SoccerNet GSR split(s) into data/gsr/ (default: valid, ~10 GB; SPLITS="train valid test")
+#   make dataset    SoccerNet GSR split(s) into data/gsr/ (default: valid, ~10 GB; SPLITS="train valid test" for all)
+#                   no password needed; `make data` is an alias
 #   make check      pytest
 #   make profile    live-path latency profile (SEQ=<GSR sequence folder with img1/>)
 #
@@ -24,12 +25,12 @@ SPLITS   ?= valid
 SEQ      ?=
 GPU := $(shell $(SYS_PY) scripts/setup/setup_assets.py gpu)
 
-.PHONY: all setup deps checkpoints export data check profile help
+.PHONY: all setup deps checkpoints export dataset data check profile help
 
 all: setup
 
 help:
-	@echo targets: setup deps checkpoints export data check profile. GPU detected: $(GPU)
+	@echo targets: setup deps checkpoints export dataset check profile. GPU detected: $(GPU)
 
 setup: deps checkpoints export
 	@echo setup done. GPU: $(GPU)
@@ -61,9 +62,11 @@ else
 	@echo No NVIDIA GPU: NBJW ONNX exported, TensorRT engines skipped.
 endif
 
-data: $(PY)
+dataset: $(PY)
 	$(PY) -m pip install SoccerNet
 	$(PY) scripts/setup/setup_assets.py data --splits $(SPLITS)
+
+data: dataset
 
 check: $(PY)
 	$(PY) -m pytest tests -q
