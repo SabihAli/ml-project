@@ -15,6 +15,29 @@ changed. Numbers from a machine that is not the production host are tagged as su
 
 ---
 
+## 2026-11-14: live-path latency baseline on the RTX 3090 (pipeline improvement plan 1, Phase 3)
+
+Tag: `rtx-3090`. `scripts/pipeline_improvement_1/phase3/profile_latency.py` (`make profile`), SNGS-021,
+600 frames after 50 warm-up, frames preloaded, stages back to back on one thread. torch 2.6.0+cu124,
+TensorRT 10.16.1.11; detector and c5c on TensorRT; calibration backend auto, K=5, **inline**.
+
+| stage | mean | p50 | p95 | per frame |
+|---|---|---|---|---|
+| detector | 8.42 | 8.12 | 9.97 | 8.42 |
+| c5c, per call (armed on 78/600 frames) | 9.97 | 9.88 | 10.83 | 1.30 |
+| NBJW, per run (120 runs) | 35.94 | 36.76 | 39.97 | 7.19 |
+| calibrator incl. NBJW | 14.45 | 7.41 | 46.14 | 14.45 |
+| tracker | 2.15 | 2.13 | 2.58 | 2.15 |
+| roles | 2.65 | 2.41 | 2.84 | 2.65 |
+| **e2e** | **31.94** | **23.89** | **63.73** | 31.3 fps |
+
+Against §1.4: detector inside its 12 ms; c5c 2x its 5 ms; NBJW inline and over 25 ms; camera motion
+7.4 ms vs 2 ms; e2e p95 63.7 ms vs 25 ms target / 40 ms ceiling. JPEG decode (cv2.imread) 8.7 ms, not
+included. Next: async calibration, faster camera motion, c5c preprocessing on the GPU
+(`docs/plans/HANDOFF_PIPELINE_IMPROVEMENT_1.md`).
+
+---
+
 ## 2026-11-12: pipeline improvement plan 1, Phase 3a (replay on every split, mining, multi-peak)
 
 Tag: `kaggle-t4`. `phase3a_mining.ipynb` (`phase3a_mine.py`). Raw: `data/outputs/pipeline_improvement_1/phase3a/`.

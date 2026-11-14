@@ -2,7 +2,7 @@
 
 ## Ball Detection: Recall, Robustness, and Real-Time Performance
 
-**Status:** In progress. Phase 0 closed 2026-11-09, Phase 1 closed 2026-11-10, Phase 4 closed 2026-11-11 (reverted: no tracker beat Phase 1); Phase 3 in progress (3a done 2026-11-12: mining + multi-peak, multi-peak reverted; next: latency profile on the RTX 3090, then teacher-student), then 2 -> 5 -> 6 (§5).\
+**Status:** In progress. Phase 0 closed 2026-11-09, Phase 1 closed 2026-11-10, Phase 4 closed 2026-11-11 (reverted: no tracker beat Phase 1); Phase 3 in progress (3a done 2026-11-12: mining + multi-peak, multi-peak reverted; RTX 3090 latency baseline 2026-11-14: e2e p50 23.9 / p95 63.7 ms; next: latency fixes, then teacher-student; see `docs/plans/HANDOFF_PIPELINE_IMPROVEMENT_1.md`), then 2 -> 5 -> 6 (§5).\
 **Primary objective:** Reach **90%+ ball-detection recall** while
 retaining real-time performance within the existing system's end-to-end
 latency budget.\
