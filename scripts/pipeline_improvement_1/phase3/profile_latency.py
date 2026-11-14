@@ -40,9 +40,12 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
 TARGET_P95_MS, CEILING_MS = 25.0, 40.0
+DEVICE_SYNC = True       # off in async calibration: a device-wide sync would wait for the background NBJW too
 
 
 def _sync():
+    if not DEVICE_SYNC:
+        return
     try:
         import torch
         if torch.cuda.is_available():
@@ -92,7 +95,8 @@ def env_info(pipe):
         info["torch"] = "missing"
     for mod in ("onnxruntime", "tensorrt"):
         try:
-            info[mod] = __import__(mod).__version__
+            m = __import__(mod)
+            info[mod] = getattr(m, "__version__", None) or "unknown (no __version__)"
         except ImportError:
             info[mod] = "missing"
     info["detector_backend"] = str(pipe.detector.backend)
@@ -131,6 +135,9 @@ def main():
                     "calibration on cpu)")
     ap.add_argument("--calib_backend", default="", help="override calibration.backend: torch | auto | tensorrt | "
                     "ort_gpu (non-torch needs the NBJW ONNX from scripts/path_b/calibration/export_nbjw.py)")
+    ap.add_argument("--calib_mode", default="", choices=["", "inline", "async"],
+                    help="override calibration.mode (async: NBJW on a background thread)")
+    ap.add_argument("--calib_k", type=int, default=0, help="override calibration.calib_every_k")
     ap.add_argument("--frames", type=int, default=600, help="frames timed (after warm-up)")
     ap.add_argument("--warmup", type=int, default=50)
     ap.add_argument("--spec_iters", type=int, default=300)
@@ -149,6 +156,14 @@ def main():
         cfg.setdefault("jersey", {})["gpu"] = "cuda" in a.device     # EasyOCR takes gpu: bool, not device
     if a.calib_backend:
         cfg.setdefault("calibration", {})["backend"] = a.calib_backend
+    if a.calib_mode:
+        cfg.setdefault("calibration", {})["mode"] = a.calib_mode
+    if a.calib_k:
+        cfg.setdefault("calibration", {})["calib_every_k"] = a.calib_k
+    global DEVICE_SYNC
+    # Every stage returns host arrays, so timings hold without a device sync. In async mode a
+    # device-wide sync would also wait for the background NBJW and hide what async buys.
+    DEVICE_SYNC = cfg.get("calibration", {}).get("mode", "inline") != "async"
     t0 = time.time()
     pipe = GSRPipeline(cfg)
     load_s = time.time() - t0
@@ -178,6 +193,11 @@ def main():
     pipe.calibrator.close()
     pipe.calibrator = pipe._new_calibrator()
     T.wrap(pipe.calibrator, "update", "calibrator (incl. NBJW)")
+    if pipe.calibrator.motion is not None:
+        T.wrap(pipe.calibrator.motion, "update", "camera motion")
+        T.wrap(pipe.calibrator.motion, "_prepare", "camera motion: resize/grey/mask")
+    if pipe.calibrator.mode == "async":       # gated path skips kp_detector.detect: time the whole run
+        T.wrap(pipe.calibrator, "_run_nbjw_here", "NBJW run, background wall time incl. frame-tick waits")
     T.wrap(fuser, "update", "ball fusion (incl. c5c)")
     T.wrap(roles, "update", "roles")
 
@@ -195,6 +215,7 @@ def main():
         if (i + 1) % 100 == 0:
             print(f"  frame {i + 1}/{len(frames)}: e2e p50 {np.percentile(e2e, 50):.1f} ms", flush=True)
     n = len(e2e)
+    pipe.calibrator.close()
     stages = {k: stats(v, n) for k, v in T.t.items()}
 
     spec_alone = None
@@ -230,7 +251,9 @@ def main():
          f"TensorRT {env.get('tensorrt')} | {env['time']}", "",
          f"Backends: detector `{env['detector_backend']}`, c5c `{env['specialist_backend']}`, calibration "
          f"`{env['calibration']}`. Sequence {a.sequence_dir.name}, {n} frames after {a.warmup} warm-up, frames in "
-         "memory, stages back to back on one thread (as process_stream runs today).", "",
+         "memory, stages back to back on one thread (as process_stream runs today)"
+         + ("; async calibration: NBJW on a background thread, no device-wide sync in the timers, "
+            "so the NBJW row is its time on that thread, off the frame loop" if not DEVICE_SYNC else "") + ".", "",
          "## End to end (detect -> ball fusion -> track -> calibrate -> project -> roles)", "",
          "| | mean | p50 | p95 | max |", "|---|---|---|---|---|",
          f"| ms per frame | {f(e)} |", "",

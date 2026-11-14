@@ -79,7 +79,7 @@ def _oracle_calibrator(**kw):
     calls = []
     by_id = {}
 
-    def run_nbjw(frame_bgr):
+    def run_nbjw(frame_bgr, *_):
         t = by_id[frame_bgr.tobytes()[:4096]]
         calls.append(t)
         return _true_h(t), {}, {}, {}
@@ -160,3 +160,65 @@ def test_async_never_blocks_after_bootstrap_and_reanchors():
         assert len(calls) >= 3          # re-anchored repeatedly in the background
     finally:
         calib.close()
+
+
+class _NetStub:
+    def __init__(self, name, log, calib):
+        self.name, self.log, self.calib = name, log, calib
+
+    def infer(self, x):
+        self.log.append((self.name, self.calib._tick))
+        return x
+
+
+class _GatedKpStub:
+    """Has the attributes the async gated path uses; networks record the frame tick they ran on."""
+
+    def __init__(self, log, calib):
+        self.net_kp, self.net_l = _NetStub("kp", log, calib), _NetStub("l", log, calib)
+
+    def preprocess(self, frame):
+        return frame
+
+    def detect(self, frame):                             # the ungated bootstrap run
+        self.net_kp.log.append(("bootstrap", self.net_kp.calib._tick))
+        return {}, {}
+
+    def decode(self, hm_kp, hm_l):
+        return {}
+
+
+def test_async_gating_runs_one_network_per_frame_tick(monkeypatch):
+    """Async NBJW launches its two networks on consecutive update() ticks, the first one on the
+    submitting frame's tick, and close() never deadlocks on a worker waiting for a tick."""
+    import time
+
+    import torch
+    monkeypatch.setattr(torch.cuda, "current_stream", lambda *a: type("S", (), {"synchronize": lambda self: None})())
+    log = []
+    calib = LiveCalibrator(kp_detector=None, image_width=W, image_height=H_PX, calib_every_k=5, mode="async",
+                           motion={"work_width": 480})
+    calib._cuda_stream = None
+    calib.kp_detector = _GatedKpStub(log, calib)
+    calib.homography.compute = lambda kps: (np.eye(3), {})
+    frames = _frames(12)
+    for t, frame in enumerate(frames):
+        calib.update(t, frame)
+        time.sleep(0.02)                                 # let the worker reach its next wait
+    calib.close()
+    # Bootstrap (frame 0) is ungated; afterwards every run's kp/l land on ticks n, n+1.
+    assert log[0][0] == "bootstrap"
+    gated = log[1:]
+    assert len(gated) >= 4, log
+    for (a, ta), (b, tb) in zip(gated[::2], gated[1::2]):
+        assert (a, b) == ("kp", "l") and tb == ta + 1, log
+    assert calib._closing
+
+
+def test_async_close_releases_a_worker_waiting_for_a_tick():
+    import threading
+    calib = LiveCalibrator(kp_detector=None, image_width=W, image_height=H_PX, calib_every_k=5, mode="async")
+    done = threading.Event()
+    threading.Thread(target=lambda: (calib._wait_tick(calib._tick + 5), done.set()), daemon=True).start()
+    calib.close()
+    assert done.wait(2.0)

@@ -126,6 +126,7 @@ class BallSpecialist:
         self.artifact = SpecialistArtifact.load(onnx_path)
         self.crop = self.artifact.crop
         self.stride = self.artifact.stride
+        self._host_buf: Optional[torch.Tensor] = None
         self.backend, self.runner, self.device = self._select(
             Backend(backend) if backend else None, device, auto_build_engine)
         log.info("BallSpecialist: %s backend=%s device=%s crop=%d sidecar threshold=%.2f",
@@ -176,21 +177,36 @@ class BallSpecialist:
         out = self.runner.infer_all(x)
         return out["heatmap"], out["offset"]
 
+    def _preprocess(self, frames_bgr: list, x0: int, y0: int) -> torch.Tensor:
+        """t-2, t-1, t BGR crops -> (1, 9, crop, crop) float32 RGB 0..255 on the device.
+
+        Only the three uint8 BGR crops are copied on the CPU (into one pinned buffer); the
+        BGR->RGB flip, channel stacking and float conversion run on the GPU. Pure reordering and
+        an exact uint8->float cast, so the tensor is identical to the old CPU path
+        (tests/test_ball_specialist_preprocess.py)."""
+        c = self.crop
+        buf = self._host_buf
+        if buf is None or buf.shape[0] != len(frames_bgr):
+            buf = torch.empty((len(frames_bgr), c, c, 3), dtype=torch.uint8,
+                              pin_memory=self.device.type == "cuda")
+            self._host_buf = buf
+        hb = buf.numpy()
+        for i, f in enumerate(frames_bgr):
+            crop = f[y0:y0 + c, x0:x0 + c]
+            h, w = crop.shape[:2]
+            if (h, w) != (c, c):                                      # frame smaller than the window
+                hb[i].fill(0)
+            hb[i, :h, :w] = crop
+        x = buf.to(self.device, non_blocking=True)                   # (3, c, c, 3) uint8 BGR
+        x = x.flip(-1).permute(0, 3, 1, 2).reshape(1, 3 * len(frames_bgr), c, c)
+        return x.to(torch.float32)
+
     @torch.no_grad()
     def detect(self, frames_bgr: list, x0: int, y0: int) -> tuple[float, float, float]:
         """Frames t-2, t-1, t (BGR, full size) and a window's top-left -> the strongest peak
         as (x, y, confidence), x/y in full-frame pixels."""
-        c = self.crop
-        crops = []
-        for f in frames_bgr:
-            crop = f[y0:y0 + c, x0:x0 + c, ::-1]                      # BGR -> RGB
-            if crop.shape[:2] != (c, c):                              # frame smaller than the window
-                padded = np.zeros((c, c, 3), np.uint8)
-                padded[:crop.shape[0], :crop.shape[1]] = crop
-                crop = padded
-            crops.append(crop)
-        x = np.ascontiguousarray(np.concatenate(crops, axis=2).transpose(2, 0, 1))[None]
-        logits, off = self._forward(torch.from_numpy(x).to(self.device, torch.float32))
+        x = self._preprocess(frames_bgr, x0, y0)
+        logits, off = self._forward(x)
 
         # heatmap_model.decode: the single strongest cell, refined by its offset.
         logits = logits.float().cpu()

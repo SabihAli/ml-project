@@ -84,7 +84,7 @@ def main():
           and all(int(r["track_id"]) == BALL_TRACK_ID for r in balls))
     check("every ball says where it came from", all(r["ball_source"] in ("main", "specialist") for r in balls),
           f"{len(balls)} balls, sources {dict((s, sum(r['ball_source'] == s for r in balls)) for s in ('main', 'specialist'))}")
-    check("ball stats are reported", set(summary["ball_stats"]) == {"main", "specialist_calls", "specialist_hits"},
+    check("ball stats are reported", set(summary["ball_stats"]) == {"main", "specialist_calls", "specialist_hits", "gate_rejects"},
           str(summary["ball_stats"]))
     check("roles were fitted within the run", summary["roles_fitted"])
     check("fitted roles produce teams", any(r["team"] in ("left", "right") for r in rows))

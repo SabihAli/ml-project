@@ -181,7 +181,8 @@ def _nbjw_runner(onnx_path: Optional[str], backend: str, device: str, torch_mode
                 digest = sha256_file(onnx)
                 ensure_engine(onnx, engine, digest, auto_build=auto_build_engine)
                 check_sidecar(engine, digest)
-                return TrtRunner(engine, device=device if on_cuda else "cuda:0")
+                return TrtRunner(engine, device=device if on_cuda else "cuda:0",
+                                 priority=TrtRunner.PRIORITY_BACKGROUND)
             if tier in ("ort_gpu", "ort_cpu"):
                 from gsr_pipeline.runtime.ort_runner import OrtRunner
                 return OrtRunner(onnx, device="cuda:0" if tier == "ort_gpu" else "cpu")

@@ -14,12 +14,17 @@ as mean and p95, plus how many frames had no homography. Recommended K = the lar
 vs_gt mean and p95 both stay within --tolerance_m (default 0.5) of K=1.
 
 GT boxes stand in for detector boxes in the camera-motion mask (the athlete detector's
-recall is ~98%, docs/results/PATH_B_EVAL_T4_2026-10-05.md). Inline mode only: async adds result latency that depends on the
-NBJW backend's speed, so gate it separately on the production GPU.
+recall is ~98%, docs/results/PATH_B_EVAL_T4_2026-10-05.md).
+
+--mode async replays calibration.mode async: each NBJW result lands D frames after its frame
+(--delays, e.g. 1 2 3 5) through a deterministic stand-in for the background worker, so the
+gate does not depend on this machine's timing. Read D off the profiler: NBJW time on its
+thread / frame period, rounded up (scripts/pipeline_improvement_1/phase3/profile_latency.py).
 
 Usage:
     python -m gsr_pipeline.evaluate_calib_propagation \\
         --sequence_dir data/datasets/SoccerNetGS/gamestate-2024/valid/SNGS-021 --ks 1 3 5 10 25
+    python -m gsr_pipeline.evaluate_calib_propagation --sequence_dir <seq> --ks 1 5 --mode async --delays 1 2 3 5
 """
 
 from __future__ import annotations
@@ -66,6 +71,33 @@ def _project(h: np.ndarray, pts: np.ndarray) -> np.ndarray:
         return p[:, :2] / p[:, 2:3]
 
 
+class _DelayedResult:
+    """A finished NBJW run that only reports done() D frames after it was submitted."""
+
+    def __init__(self, value, ready_at, clock):
+        self.value, self.ready_at, self.clock = value, ready_at, clock
+
+    def done(self):
+        return self.clock["t"] >= self.ready_at
+
+    def result(self):                 # blocking wait, as a real Future: done from now on
+        self.ready_at = min(self.ready_at, self.clock["t"])
+        return self.value
+
+
+class _DelayedPool:
+    """Deterministic stand-in for LiveCalibrator's one-thread pool (async mode)."""
+
+    def __init__(self, delay, clock):
+        self.delay, self.clock = delay, clock
+
+    def submit(self, fn, *a):
+        return _DelayedResult(fn(*a), self.clock["t"] + self.delay, self.clock)
+
+    def shutdown(self, **_):
+        pass
+
+
 def _summary(d: List[float]) -> Dict[str, float]:
     if not d:
         return {"n": 0, "mean": float("nan"), "p95": float("nan")}
@@ -82,6 +114,10 @@ def main() -> None:
     ap.add_argument("--start_frame", type=int, default=0)
     ap.add_argument("--device", default=None, help="NBJW device (default: config)")
     ap.add_argument("--backend", default=None, help="NBJW backend (default: config)")
+    ap.add_argument("--mode", choices=["inline", "async"], default="inline",
+                    help="K=1 stays inline (the reference); other K run in this mode")
+    ap.add_argument("--delays", type=int, nargs="+", default=[2],
+                    help="async only: frames between an NBJW submit and its result")
     ap.add_argument("--tolerance_m", type=float, default=0.5)
     ap.add_argument("--output_json", default=None)
     args = ap.parse_args()
@@ -116,16 +152,22 @@ def main() -> None:
     print(f"  {1000 * (time.perf_counter() - t0) / max(1, len(images)):.0f} ms/frame for NBJW + homography",
           flush=True)
 
+    runs = [(k, "inline", 0) for k in args.ks]
+    runs += [(k, "async", d) for k in args.ks if args.mode == "async" and k > 1 for d in args.delays]
     results = {}
-    for k in args.ks:
+    for k, mode, delay in runs:
+        label = str(k) if mode == "inline" else f"{k} async D={delay}"
         calib = LiveCalibrator(
             kp_detector=None, image_width=c.get("image_width", 1920), image_height=c.get("image_height", 1080),
-            use_prev_homography=c.get("use_prev_homography", True), calib_every_k=k, mode="inline",
+            use_prev_homography=c.get("use_prev_homography", True), calib_every_k=k, mode=mode,
             max_h_age_frames=c.get("max_h_age_frames", 50), min_inlier_ratio=c.get("min_inlier_ratio", 0.5),
             max_zoom_change=c.get("max_zoom_change", 0.15),
             min_trigger_interval_frames=c.get("min_trigger_interval_frames", 3), motion=c.get("motion"))
         cur = {"t": 0}
-        calib._run_nbjw = lambda frame, cur=cur: ref[cur["t"]]
+        calib._run_nbjw = lambda frame, *_, cur=cur: ref[cur["t"]]
+        if mode == "async":
+            calib._pool.shutdown(wait=False)
+            calib._pool = _DelayedPool(delay, cur)
         vs_nbjw, vs_gt, sources, nbjw_runs, overhead_ms = [], [], defaultdict(int), 0, []
         last_ref = None                       # per-frame NBJW with reuse -- what K=1 emits
         for t, (image_id, fn) in enumerate(images):
@@ -135,9 +177,10 @@ def main() -> None:
             frame = read(fn)
             s = time.perf_counter()
             res = calib.update(t, frame, boxes)
-            if not res.nbjw_ran:
+            ran = res.nbjw_ran or (mode == "async" and calib._last_submit == t)
+            if not ran:
                 overhead_ms.append(1000 * (time.perf_counter() - s))
-            nbjw_runs += int(res.nbjw_ran)
+            nbjw_runs += int(ran)
             sources[res.h_source] += 1
             if ref[t][0] is not None:
                 last_ref = ref[t][0]
@@ -152,12 +195,12 @@ def main() -> None:
                 pr = _project(last_ref, foot)
                 ok2 = ok & np.isfinite(pr).all(1)
                 vs_nbjw += np.linalg.norm(pk[ok2] - pr[ok2], axis=1).tolist()
-        results[k] = {"vs_nbjw": _summary(vs_nbjw), "vs_gt": _summary(vs_gt),
+        results[label] = {"vs_nbjw": _summary(vs_nbjw), "vs_gt": _summary(vs_gt),
                       "nbjw_runs": nbjw_runs, "frames": len(images),
                       "no_h_frames": sources.get(H_NONE, 0), "h_sources": dict(sources),
                       "propagation_ms_mean": float(np.mean(overhead_ms)) if overhead_ms else 0.0}
 
-    base = results.get(1) or results[min(results)]
+    base = results.get("1") or next(iter(results.values()))
     print("\n| K | NBJW runs | vs NBJW mean / p95 (m) | vs GT mean / p95 (m) | no-H frames "
           "| propagate ms/frame | sources |")
     print("|---|---|---|---|---|---|---|")
@@ -172,8 +215,11 @@ def main() -> None:
               f"{g['mean']:.2f} / {g['p95']:.2f} | {r['no_h_frames']} | {r['propagation_ms_mean']:.1f} | "
               + ", ".join(f"{s} {n}" for s, n in sorted(r["h_sources"].items()))
               + f" |{'' if ok else ' FAIL'}")
-    rec = max(passing) if passing else 1
-    print(f"\nRecommended calib_every_k (vs-GT mean and p95 within {args.tolerance_m} m of K=1): {rec}")
+    inline_pass = [int(k) for k in passing if k.isdigit()]
+    rec = max(inline_pass) if inline_pass else 1
+    print(f"\nRecommended calib_every_k (inline; vs-GT mean and p95 within {args.tolerance_m} m of K=1): {rec}")
+    if args.mode == "async":
+        print("Async runs within tolerance: " + (", ".join(k for k in passing if "async" in k) or "none"))
     print("One sequence is not enough to set it; repeat over several GSR valid sequences.")
 
     if args.output_json:

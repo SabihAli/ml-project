@@ -96,8 +96,11 @@ class GSRPipeline:
             self._reid = OSNetReID(**self.cfg.get("reid", {}))
         return self._reid
 
-    def _new_calibrator(self) -> LiveCalibrator:
-        """Fresh per-sequence/per-stream calibration state (anchor H, motion chain)."""
+    def _new_calibrator(self, batch: bool = False) -> LiveCalibrator:
+        """Fresh per-sequence/per-stream calibration state (anchor H, motion chain).
+
+        `calibration.mode` applies to the live path. Batch always calibrates inline: async results
+        land when the background thread finishes, so predictions.json would vary run to run."""
         c = self._calib_cfg
         return LiveCalibrator(
             self.kp_detector,
@@ -106,7 +109,7 @@ class GSRPipeline:
             use_prev_homography=c.get("use_prev_homography", True),
             compute_cam_params=c.get("compute_cam_params", False),
             calib_every_k=c.get("calib_every_k", 1),
-            mode=c.get("mode", "inline"),
+            mode="inline" if batch else c.get("mode", "inline"),
             max_h_age_frames=c.get("max_h_age_frames", 50),
             min_inlier_ratio=c.get("min_inlier_ratio", 0.5),
             max_zoom_change=c.get("max_zoom_change", 0.15),
@@ -188,7 +191,7 @@ class GSRPipeline:
         """
         frame_source = source if isinstance(source, FrameSource) else ImageDirFrameSource(str(source))
         self.calibrator.close()
-        self.calibrator = self._new_calibrator()
+        self.calibrator = self._new_calibrator(batch=True)
         ball_fuser = self._new_ball_fuser()
         refine_cfg = self.cfg.get("refiner", {})
         use_refiner = refine_cfg.get("enabled", False)

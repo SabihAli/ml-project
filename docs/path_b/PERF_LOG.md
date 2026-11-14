@@ -15,6 +15,43 @@ changed. Numbers from a machine that is not the production host are tagged as su
 
 ---
 
+## 2026-11-14: CUDA streams, c5c GPU preprocessing, gated NBJW, motion at 480 px (pipeline improvement plan 1, Phase 3)
+
+Tag: `rtx-3090`. `profile_latency.py`, SNGS-021, 600 frames, async calibration. Details:
+`docs/results/PIPELINE_IMPROVEMENT_1_PHASE3_LATENCY.md`.
+
+| ms | async (entry below) | now |
+|---|---|---|
+| detector p95 | 37.13 | 14.26 |
+| c5c per call p50 | 9.47 | 3.05 |
+| camera motion p50 | 7.1 | 4.8 |
+| calibrator p95 | 8.96 | 6.69 |
+| **e2e p50 / p95** | **24.69 / 56.27** | **21.59 / 28.73** (44.0 fps) |
+
+Per-engine CUDA streams; c5c flip/stack/cast on the GPU (identical input); async NBJW launches one network per frame
+tick, in the GPU gap after detector + c5c; `motion.work_width` 480 (vs-GT within +-0.02 m on 10 sequences). p95 is
+inside the 40 ms ceiling, 3.7 ms over the 25 ms target.
+
+---
+
+## 2026-11-14: async calibration on the RTX 3090 (pipeline improvement plan 1, Phase 3)
+
+Tag: `rtx-3090`. `profile_latency.py --calib_mode inline|async`, SNGS-021, same setup as the baseline below.
+Details: `docs/results/PIPELINE_IMPROVEMENT_1_PHASE3_LATENCY.md`.
+
+| ms | inline | async |
+|---|---|---|
+| calibrator incl. NBJW, p95 | 45.81 | 8.96 |
+| detector, p95 | 10.14 | 37.13 |
+| **e2e p50 / p95** | **24.19 / 63.52** | **24.69 / 56.27** |
+
+Accuracy holds on 10 GSR valid sequences (async K=5 vs inline K=5: <= +0.09 m mean, +0.12 m p95 vs GT with
+results 5 frames late). `calibration.mode: async` is now the live default; batch stays inline. The detector
+p95 rise is default-stream contention with NBJW (all TensorRT engines enqueue on the default stream); a
+non-default stream per engine is next.
+
+---
+
 ## 2026-11-14: live-path latency baseline on the RTX 3090 (pipeline improvement plan 1, Phase 3)
 
 Tag: `rtx-3090`. `scripts/pipeline_improvement_1/phase3/profile_latency.py` (`make profile`), SNGS-021,

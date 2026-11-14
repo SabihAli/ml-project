@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -104,16 +105,64 @@ class LiveCalibrator:
         self._last_out: Optional[np.ndarray] = None
 
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="nbjw") if mode == "async" else None
+        # Async: the background NBJW's own torch ops (preprocess, decode) go on a private CUDA
+        # stream, so they never sit in front of the frame loop's work on the default stream.
+        self._cuda_stream = None
+        # Async GPU gating: the worker launches at most one NBJW network per frame, when
+        # update() runs. update() comes after the detector and c5c in the frame loop, so each
+        # network (~11 ms on a 3090) lands in the GPU's idle gap while the CPU does calibration,
+        # tracking and roles, instead of overlapping the next detector call (which it slowed from
+        # p95 10 to 30 ms even on separate prioritised streams). Result latency: ~2 frames.
+        self._tick = 0
+        self._tick_cv = threading.Condition()
+        self._closing = False
+        if mode == "async":
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    self._cuda_stream = torch.cuda.Stream()
+            except ImportError:
+                pass
         self._pending: Optional[Tuple[int, Future]] = None
 
     # -- NBJW ----------------------------------------------------------------------------
 
-    def _run_nbjw(self, frame_bgr: np.ndarray):
-        keypoints, lines = self.kp_detector.detect(frame_bgr)
+    def _run_nbjw(self, frame_bgr: np.ndarray, start_tick: Optional[int] = None):
+        if self._cuda_stream is not None:
+            import torch
+            with torch.cuda.stream(self._cuda_stream):
+                return self._run_nbjw_here(frame_bgr, start_tick)
+        return self._run_nbjw_here(frame_bgr, start_tick)
+
+    def _wait_tick(self, after: int) -> int:
+        """Block until update() has started frame tick `after + 1` (or the calibrator closes)."""
+        with self._tick_cv:
+            self._tick_cv.wait_for(lambda: self._tick > after or self._closing)
+            return self._tick
+
+    def _run_nbjw_here(self, frame_bgr: np.ndarray, start_tick: Optional[int] = None):
+        kd = self.kp_detector
+        gated = start_tick is not None and all(hasattr(kd, a) for a in ("preprocess", "net_kp", "net_l", "decode"))
+        if gated:
+            import torch
+            from gsr_pipeline.calibrate import _kp_to_lines
+            x = kd.preprocess(frame_bgr)
+            tick = self._wait_tick(start_tick)
+            hm_kp = kd.net_kp.infer(x)
+            torch.cuda.current_stream().synchronize()
+            self._wait_tick(tick)
+            hm_l = kd.net_l.infer(x)
+            keypoints = kd.decode(hm_kp, hm_l)
+            H, params = self.homography.compute(keypoints)
+            return H, params, keypoints, _kp_to_lines(keypoints)
+        keypoints, lines = kd.detect(frame_bgr)
         H, params = self.homography.compute(keypoints)
         return H, params, keypoints, lines
 
     def close(self) -> None:
+        with self._tick_cv:
+            self._closing = True
+            self._tick_cv.notify_all()
         if self._pool is not None:
             self._pool.shutdown(wait=True, cancel_futures=True)
             self._pool = None
@@ -149,6 +198,10 @@ class LiveCalibrator:
 
     def update(self, frame_idx: int, frame_bgr: np.ndarray,
                boxes_ltrb: Optional[np.ndarray] = None) -> CalibResult:
+        if self.mode == "async":
+            with self._tick_cv:
+                self._tick += 1
+                self._tick_cv.notify_all()
         trigger = None
         if self.use_motion:
             est = self.motion.update(frame_bgr, boxes_ltrb)
@@ -224,7 +277,10 @@ class LiveCalibrator:
 
     def _submit(self, frame_idx: int, frame_bgr: np.ndarray) -> None:
         self._last_submit = frame_idx
-        self._pending = (frame_idx, self._pool.submit(self._run_nbjw, frame_bgr.copy()))
+        # The bootstrap run is waited on synchronously, so it must not wait for a tick.
+        bootstrap = self._anchor_H is None and self._last_out is None
+        start = None if bootstrap else self._tick - 1          # first network launches right away
+        self._pending = (frame_idx, self._pool.submit(self._run_nbjw, frame_bgr.copy(), start))
 
     def _update_async(self, frame_idx, frame_bgr, trigger) -> CalibResult:
         if self._pending is None and trigger is not None:

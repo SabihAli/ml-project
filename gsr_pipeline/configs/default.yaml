@@ -90,7 +90,11 @@ calibration:
   # Choose K against per-frame NBJW on GSR valid (plan section 7.3: largest K whose pitch
   # error stays within 0.5 m of K=1). 5: SNGS-021, 0.58 m vs GT (K=1: 0.59), 0.18 m vs per-frame NBJW.
   calib_every_k: 5
-  mode: "inline"              # inline | async (NBJW on a background thread)
+  # Live path (process_stream) only; batch process_sequence always runs inline, so predictions.json
+  # stays reproducible. async: NBJW on a background thread, H propagated until its result lands.
+  # Async since 2026-11-14: vs-GT error within +0.09 m mean / +0.12 m p95 of inline K=5 on 10 GSR
+  # valid sequences with results up to 5 frames late (evaluate_calib_propagation --mode async).
+  mode: "async"               # inline | async
   max_h_age_frames: 50        # force an NBJW run when the anchor is older than this
   min_inlier_ratio: 0.5       # camera-motion RANSAC inliers below this break propagation
   max_zoom_change: 0.15       # re-run NBJW once zoom since the anchor exceeds +-15%
@@ -99,7 +103,8 @@ calibration:
                               # NBJW running every frame where it keeps failing (close-ups,
                               # replays). 1 = no limit. first / scene_cut / every_k exempt.
   motion:                     # CameraMotionEstimator
-    work_width: 640
+    work_width: 480              # 640 -> 480 on 2026-11-14: motion 7.2 -> 4.6 ms in the live loop, vs-GT
+                                 # within +-0.02 m on 10 valid sequences (PIPELINE_IMPROVEMENT_1_PHASE3_LATENCY.md)
     max_corners: 400
     ransac_px: 2.0
     min_tracked: 30

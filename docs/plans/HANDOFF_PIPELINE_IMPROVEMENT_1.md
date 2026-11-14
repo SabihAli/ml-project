@@ -59,12 +59,12 @@ is excluded (frames preloaded); live needs NVDEC or a decode thread.
 
 ## Next steps (the user wants these done on the 3090, then carry on)
 
-1. **Async calibration:** add `--calib_mode` to `profile_latency.py`, profile with `calibration.mode: async`
+1. **Done 2026-11-14** (`docs/results/PIPELINE_IMPROVEMENT_1_PHASE3_LATENCY.md`): async is the live default, batch stays inline; accuracy holds on 10 valid sequences; e2e p95 63.5 -> 56.3 ms only, because NBJW and the detector share the default CUDA stream (detector p95 10 -> 37 ms), so do step 3's streams before reading much into later profiles. Original note: **Async calibration:** add `--calib_mode` to `profile_latency.py`, profile with `calibration.mode: async`
    (already implemented in `gsr_pipeline/calibration_live.py`); expect p95 near p50. If accuracy holds
    (`python -m gsr_pipeline.evaluate_calib_propagation`), make async the default.
-2. **Camera motion 7.4 -> ~2 ms:** `gsr_pipeline/camera_motion.py`, e.g. optical flow on a downscaled frame
+2. **Partly done 2026-11-14:** `motion.work_width` 480, 7.2 -> 4.8 ms in the loop, accuracy unchanged; still over 2 ms (next: reuse tracked corners, or a grey frame from the detector's GPU preprocessing). Original note: **Camera motion 7.4 -> ~2 ms:** `gsr_pipeline/camera_motion.py`, e.g. optical flow on a downscaled frame
    or on the GPU. Check the propagated-H accuracy with `evaluate_calib_propagation`.
-3. **c5c preprocessing on the GPU** (crop, difference channels, H2D copy; `gsr_pipeline/ball_specialist.py`)
+3. **Done 2026-11-14:** c5c 10 -> 3 ms per call; per-engine CUDA streams; async NBJW gated to one network per frame tick (detector p95 back to 14 ms); e2e p95 63.5 -> 28.7 ms (`docs/results/PIPELINE_IMPROVEMENT_1_PHASE3_LATENCY.md`). Original note: **c5c preprocessing on the GPU** (crop, difference channels, H2D copy; `gsr_pipeline/ball_specialist.py`)
    and a non-default CUDA stream for TensorRT (`gsr_pipeline/runtime/trt_runner.py`; TRT warns "Using default
    stream in enqueueV3()"). Outputs must stay identical (`tests/`, specialist parity).
 4. Re-profile after each, log in PERF_LOG (tag `rtx-3090`), then continue Phase 3 teacher-student.

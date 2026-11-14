@@ -257,7 +257,11 @@ class TrtRunner:
 
     backend_name = "tensorrt"
 
-    def __init__(self, engine_path: str | Path, device: str = "cuda:0"):
+    # CUDA stream priorities: lower = more urgent. Frame-loop engines (detector, c5c) outrank
+    # background work (NBJW in async calibration), so the GPU schedules their kernels first.
+    PRIORITY_FRAME, PRIORITY_BACKGROUND = -1, 0
+
+    def __init__(self, engine_path: str | Path, device: str = "cuda:0", priority: int = PRIORITY_FRAME):
         try:
             import tensorrt as trt
         except ImportError as exc:
@@ -290,6 +294,12 @@ class TrtRunner:
             else:
                 self.output_names.append(name)
 
+        # Each engine enqueues on its own stream, not the legacy default stream: on the default
+        # stream a detector call queued behind a background NBJW run (async calibration) and its
+        # p95 went 10 -> 37 ms. TRT also warns that enqueueV3 on the default stream adds syncs.
+        # Without priorities the two still share SMs and detector p95 stayed ~30 ms.
+        self.stream = torch.cuda.Stream(device=self.device, priority=priority)
+
         self.input_name = self.input_names[0]
         self.output_name = self.output_names[0]
         self.input_shape = tuple(self.buffers[self.input_name].shape)
@@ -299,17 +309,24 @@ class TrtRunner:
         )
 
     def infer(self, x: torch.Tensor, stream: "torch.cuda.Stream | None" = None) -> torch.Tensor:
-        """Run one forward pass on `stream` (default: the current stream).
+        """Run one forward pass on `stream` (default: this runner's own stream).
 
-        The caller owns synchronisation. On the live path S1 records CUDA events around
-        this rather than synchronising, so GPU time is measured without stalling the
-        pipeline (plan 10.2).
+        Ordered against the caller's current stream both ways: the engine starts after the work
+        that produced `x`, and the caller's later work (post-processing, .cpu()) waits for the
+        output. Nothing else waits, so engines on other threads/streams can overlap.
         """
+        caller = torch.cuda.current_stream(self.device)
+        s = stream or self.stream
         dst = self.buffers[self.input_name]
-        dst.copy_(x.to(dtype=dst.dtype, non_blocking=True))
-        cuda_stream = (stream or torch.cuda.current_stream(self.device)).cuda_stream
-        if not self.context.execute_async_v3(stream_handle=cuda_stream):
-            raise RuntimeError("TensorRT execute_async_v3 failed")
+        if s is not caller:
+            s.wait_stream(caller)
+        with torch.cuda.stream(s):
+            dst.copy_(x.to(dtype=dst.dtype, non_blocking=True))
+            if not self.context.execute_async_v3(stream_handle=s.cuda_stream):
+                raise RuntimeError("TensorRT execute_async_v3 failed")
+        if s is not caller:
+            x.record_stream(s)                       # x may be freed by the caller before s is done
+            caller.wait_stream(s)
         return self.buffers[self.output_name]
 
     def close(self) -> None:

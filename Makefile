@@ -49,7 +49,10 @@ endif
 	$(PY) -m pip install -e gsr_pipeline/nbjw_calib
 ifeq ($(GPU),1)
 	$(PY) -m pip uninstall -y onnxruntime tensorrt tensorrt_cu13 tensorrt_cu13_libs tensorrt_cu13_bindings
-	$(PY) -m pip install onnxruntime-gpu "$(TRT_SPEC)"
+	$(PY) -m pip install "$(TRT_SPEC)"
+	# onnxruntime and onnxruntime-gpu share the onnxruntime/ folder: uninstalling the CPU build
+	# above deletes it, and pip skips an already-installed onnxruntime-gpu, so force a reinstall.
+	$(PY) -m pip install --force-reinstall --no-deps onnxruntime-gpu
 endif
 
 checkpoints: $(PY)
