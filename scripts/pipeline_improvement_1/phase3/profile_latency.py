@@ -144,8 +144,9 @@ def main():
 
     cfg = yaml.safe_load(a.config.read_text())
     if a.device:                                       # as run.py --device: every model on this device
-        for sec in ("detector", "ball_specialist", "reid", "calibration", "jersey"):
+        for sec in ("detector", "ball_specialist", "reid", "calibration"):
             cfg.setdefault(sec, {})["device"] = a.device
+        cfg.setdefault("jersey", {})["gpu"] = "cuda" in a.device     # EasyOCR takes gpu: bool, not device
     if a.calib_backend:
         cfg.setdefault("calibration", {})["backend"] = a.calib_backend
     t0 = time.time()
