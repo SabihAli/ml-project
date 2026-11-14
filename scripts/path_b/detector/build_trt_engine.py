@@ -25,7 +25,7 @@ import logging
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 
 DEFAULT_ONNX = REPO_ROOT / "runs" / "yolo26s_athlete_ball" / "best_736x1280.onnx"

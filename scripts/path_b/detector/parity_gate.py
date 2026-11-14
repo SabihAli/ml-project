@@ -33,7 +33,7 @@ import cv2
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 
 VALID_ROOT = REPO_ROOT / "data" / "SoccerNetGS" / "gamestate-2024"

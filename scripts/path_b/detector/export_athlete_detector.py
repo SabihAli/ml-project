@@ -33,7 +33,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_WEIGHTS = REPO_ROOT / "runs" / "yolo26s_athlete_ball" / "best.pt"
 
 # Fixed by the checkpoint; the exporter refuses to run against anything else so that a
