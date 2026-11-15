@@ -68,6 +68,13 @@ is excluded (frames preloaded); live needs NVDEC or a decode thread.
    and a non-default CUDA stream for TensorRT (`gsr_pipeline/runtime/trt_runner.py`; TRT warns "Using default
    stream in enqueueV3()"). Outputs must stay identical (`tests/`, specialist parity).
 4. Re-profile after each, log in PERF_LOG (tag `rtx-3090`), then continue Phase 3 teacher-student.
+5. **Teacher T2 done 2026-11-15** (`docs/results/PIPELINE_IMPROVEMENT_1_PHASE3B_TEACHER.md`): YOLO26s at 1920 with
+   motion channels, test 84.93% / 93.49%; with the offline trajectory pass 88.06% / 93.89%, gate met at the margin.
+   T1 (5-frame heatmap net) alone is weaker (83.79% with the pass) but the fused T2 + T1 candidates (`fuse_candidates.py`,
+   weight 0.7 on T2) give test 88.41% / 93.83% (88.17% without SNGS-050). Next: 7-channel YOLO26m
+   (`train_teacher_yolo_motion.py train --dts 1,2 --arch yolo26m --init yolo26m.pt --src_class "sports ball"`, ~85 min/epoch,
+   24.5 GB at batch 4), then re-fuse. The user runs full training themselves; agents smoke-test and hand over
+   commands.
 
 Optimisation rule (AGENTS.md / OPTIMIZATION_PLAN.md): every "exact" change must keep outputs identical;
 NBJW changes must pass `scripts/path_b/calibration/parity_pipeline.py`.

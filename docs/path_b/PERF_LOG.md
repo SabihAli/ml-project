@@ -15,6 +15,26 @@ changed. Numbers from a machine that is not the production host are tagged as su
 
 ---
 
+## 2026-11-15: offline ball teacher T2 (pipeline improvement plan 1, Phase 3b)
+
+Tag: `rtx-3090`. Accuracy only; the teacher is offline, its latency does not count against §1.4. Details:
+`docs/results/PIPELINE_IMPROVEMENT_1_PHASE3B_TEACHER.md`.
+
+| test (15 seq) | recall @15 px | precision | F1 |
+|---|---|---|---|
+| live system (Phase 1) | 76.29% | 90.21% | |
+| teacher T2: YOLO26s, 1920, 5 ch (BGR + grey t-1, t+1), live-detector init | **84.93%** | **93.49%** | 89.00% |
+
+| T2 + offline trajectory pass (temporal support + gap fill <= 10 frames) | **88.06%** | **93.89%** | 90.88% |
+| T1 (5-frame ResNet-34 heatmap net) + trajectory pass | 83.79% | 92.04% | 87.72% |
+| **T2 + T1 fused (0.7 / 0.3) + trajectory pass** | **88.41%** | **93.83%** | 91.04% |
+
+T2 threshold 0.05 from `select` (83.21% / 90.07%), not at the gate alone; with the trajectory pass (knobs and
+threshold from `select`) the gate (88% at >= 90%) is met at the margin, 87.72% without SNGS-050. 16 epochs x ~34 min, batch 4,
+14.5 GB. ~28 fps eval at 1920.
+
+---
+
 ## 2026-11-14: CUDA streams, c5c GPU preprocessing, gated NBJW, motion at 480 px (pipeline improvement plan 1, Phase 3)
 
 Tag: `rtx-3090`. `profile_latency.py`, SNGS-021, 600 frames, async calibration. Details:

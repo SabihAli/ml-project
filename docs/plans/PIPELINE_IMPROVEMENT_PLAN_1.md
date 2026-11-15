@@ -2,7 +2,7 @@
 
 ## Ball Detection: Recall, Robustness, and Real-Time Performance
 
-**Status:** In progress. Phase 0 closed 2026-11-09, Phase 1 closed 2026-11-10, Phase 4 closed 2026-11-11 (reverted: no tracker beat Phase 1); Phase 3 in progress (3a done 2026-11-12: mining + multi-peak, multi-peak reverted; RTX 3090 latency baseline 2026-11-14: e2e p50 23.9 / p95 63.7 ms; latency fixes 2026-11-14 (async calibration gated to frame ticks, CUDA streams, c5c GPU preprocessing, motion 480 px): e2e p95 28.7 ms; next: then teacher-student; see `docs/plans/HANDOFF_PIPELINE_IMPROVEMENT_1.md`), then 2 -> 5 -> 6 (§5).\
+**Status:** In progress. Phase 0 closed 2026-11-09, Phase 1 closed 2026-11-10, Phase 4 closed 2026-11-11 (reverted: no tracker beat Phase 1); Phase 3 in progress (3a done 2026-11-12: mining + multi-peak, multi-peak reverted; RTX 3090 latency baseline 2026-11-14: e2e p50 23.9 / p95 63.7 ms; latency fixes 2026-11-14 (async calibration gated to frame ticks, CUDA streams, c5c GPU preprocessing, motion 480 px): e2e p95 28.7 ms; 3b teacher T2 + offline trajectory pass 2026-11-15: test 88.06% / 93.89%, gate met at the margin; T1 + T2 ensemble 2026-11-15: test 88.41% / 93.83%; next 7-channel YOLO26m; see `docs/plans/HANDOFF_PIPELINE_IMPROVEMENT_1.md`), then 2 -> 5 -> 6 (§5).\
 **Primary objective:** Reach **90%+ ball-detection recall** while
 retaining real-time performance within the existing system's end-to-end
 latency budget.\
@@ -796,6 +796,105 @@ gives only 1,485 hard positives (cross-fitting needed); multi-peak selection (ta
 students (main detector with 2 frame-difference channels, c5c retrained, cross-fitted mining); training compute is
 not a constraint, inference latency is (§1.4 budget, shared with the future event model). First step: live-path
 latency profile on the RTX 3090 (`scripts/pipeline_improvement_1/phase3/profile_latency.py`).
+
+### Phase 3b --- Offline teacher (design, 2026-11-14)
+
+**Status (2026-11-15):** T2 trained and scored (`docs/results/PIPELINE_IMPROVEMENT_1_PHASE3B_TEACHER.md`):
+YOLO26s at 1920, 5 channels (BGR(t) + grey(t-1) + grey(t+1)), initialised from the live detector:
+**test 84.93% / 93.49%** (live 76.29% / 90.21%); gate (88% at >= 90%) not met by 3.1 pp, and ~13% of ball frames
+have no candidate at any threshold. Changes to the design below, decided with the user: no large backbone and
+no P2 head (limited, correlated data; resolution and temporal input are the levers), the 3-channel control run
+skipped, T3 (DETR) and T4 (SAHI) deprioritised. **Offline trajectory pass over T2's candidates (2026-11-15): test
+88.06% / 93.89% (87.72% without SNGS-050): gate met, at the margin.** Next: T1, then the T1 + T2 ensemble.
+T1 built 2026-11-15 (`train_teacher_heatmap.py`, smoke-tested; full training run by the user): c5c's recipe
+scaled up -- 5 RGB frames t-2..t+2, ResNet-34 encoder + U-Net decoder, stride-2 heatmap + offset, trained on
+native-scale 960x544 crops, inferred on full 1920x1080 frames; scored through `trajectory_pass.py`.
+Scripts: `scripts/pipeline_improvement_1/phase3b/train_teacher_yolo.py` (build mirror, 3-channel train, eval),
+`train_teacher_yolo_motion.py` (5-channel train, eval, candidate dump; `--dts 1,2` for 7 channels), `trajectory_pass.py`,
+`train_teacher_heatmap.py` (T1), `fuse_candidates.py` (ensemble).
+**T1 + ensemble (2026-11-15):** T1 alone is weaker (test 77.80% raw, 83.79% with the pass; plateaued from epoch ~9,
+early-stopped at 15), but its candidates cover different frames (top-5 within 15 px: T2 93.3%, union 95.3% on test).
+**Fused 0.7 x T2 + 0.3 x T1, then the pass: test 88.41% / 93.83%, 88.17% without SNGS-050** (weight and knobs on
+`select`). Next: T2 with 7 channels (grey t-2, t-1, t+1, t+2) on YOLO26m, COCO init (no football-trained m exists).
+
+**Decision (user, 2026-11-14):** train our own teacher, initialised from open-source pretrained weights; no
+off-the-shelf ball detector is the teacher. Candidates are chosen for the **best small-object F1**, and the
+teacher runs at **full resolution** (1920x1080, no downscale). Inference cost is irrelevant to the teacher
+(offline); only the students must fit §1.4.
+
+**Why a teacher can beat the student at all.** Offline, the teacher has what the live path gives up: native
+resolution (the ball is ~4-12 px wide at 1080p and loses half of that at 736x1280), large backbones, test-time
+augmentation, ensembles, and **future frames** (t-k..t+k plus a forward-backward trajectory pass), where the
+student sees only t-2..t. Most remaining misses are blur and occlusion (Phase 0 buckets), which future context
+resolves.
+
+**Metric.** One point metric for every candidate, the live system's: recall and precision @15 px on frame
+centres, at most one ball per frame, reported as F1 too; plus recall @5 px (localisation quality matters for
+pseudo-labels) and per-bucket recall (Phase 0 B0-B7). Boxes are scored by their centre.
+
+#### Candidates (ranked by expected small-object F1)
+
+| # | family | why for a 4-12 px ball | full-res cost / risk |
+|---|---|---|---|
+| T1 | **Multi-frame heatmap, high-resolution backbone** (HRNet-W32/W48, the WASB / TrackNet line of sports-ball detectors; our c5c is a small member) | keeps a stride-1/2/4 high-resolution branch the whole way, so a 5 px ball is never downsampled away; point output matches the label (a centre); multi-frame input sees motion. Bidirectional window (t-2..t+2) is free offline | memory at 1920x1080 x 5 frames: train on 1024-1280 px crops sampled around/away from the ball, infer full-frame (fully convolutional). Lowest risk: c5c already proves the pipeline |
+| T2 | **YOLO with a P2 (stride-4) head**, large backbone (YOLO26-l/x or YOLO11-x, `-p2` head), imgsz 1920 | standard YOLO detects at strides 8-32; a stride-4 head is the usual small-object fix; our tooling, export and evaluation already exist. Optional 2 frame-difference input channels (as the planned student) | 1920 x large model trains slowly but fits 24 GB at small batch; P2 adds anchors x4 (more false positives to filter). Verify YOLO26's small-target assignment claims on our data, not on COCO |
+| T3 | **DETR family, real-time-DETR lineage** (D-FINE / DEIM / RT-DETRv2, large) | strong COCO results, no NMS, fine-grained box refinement | historically weaker on tiny objects than on COCO-medium; full-res attention cost. Included as an ensemble diversity member, run only if T1/T2 leave a gap |
+| T4 | **Tiled inference** (SAHI-style, overlapping 640-960 px tiles) of T2/T3 | each tile upsamples the ball relative to the network's receptive field | a test-time option on any box detector, not a model; cheap to try once T2 exists |
+
+Plus, on top of the best model(s): **ensemble** (weighted box/point fusion of T1+T2) and **offline trajectory
+pass**: forward-backward association of per-frame candidates with a physics-aware smoother, filling gaps
+<= N frames. Phase 4 showed online tracking does not beat Phase 1, but an offline bidirectional pass is a
+different problem (it sees both ends of every gap) and is evaluated as its own row.
+
+Order: T1 and T2 in parallel (both reuse existing code), then ensemble + trajectory pass, then T3/T4 only if the
+gate below is missed by a small margin.
+
+#### Data and leakage
+
+- **Train:** GSR `train` (57) + `pool` (82), the live system's protocol, so teacher and live numbers compare.
+- **Choose knobs on `select` (10), report once on `test` (15)**, with and without SNGS-050.
+- Caveat, carried from Phase 3a: `pool`'s GSR clips share their three games with `test`, so `test` measures
+  unseen *clips*, not unseen games or venues. A teacher's recall on genuinely new matches may be lower; the
+  full-match pseudo-labels (below) are spot-audited for that reason.
+- **Cross-fitting** for every label the teacher produces on GSR clips (hard-example mining for the students):
+  K folds by game; a fold's clips are labelled only by a teacher that never trained on that game.
+
+#### Gate (go / no-go for distillation)
+
+The teacher on `test`, full resolution, best configuration chosen on `select`:
+
+- **Go:** recall @15 px >= 88% at precision >= 90% (live system: 76.29% / 90.21%). Students land below their
+  teacher; below ~88% the 90% objective is out of reach by distillation alone.
+- **No-go:** stop and report the per-bucket gap; it says whether the ceiling is data (labels, coverage) or model.
+
+#### After the gate
+
+1. Pseudo-label SoccerNet full matches. **Source (decided 2026-11-14): `videos-HQ`** (Hugging Face
+   `SoccerNet/SoccerNet_raw_HQ`, branch `videos-HQ`: `1_HQ.mkv`, `2_HQ.mkv`, `video.ini`; ~4.4 GB per match,
+   2.19 TB for all 500), the only full-resolution branch; 720p would put pseudo-labels in a different domain
+   from the 1080p GSR training data, and the 2 fps frame and 10 s clip branches lack consecutive frames.
+   Start with **50-100 matches** (220-440 GB), more only if student gains keep rising with data. Label a
+   few-minute window every N minutes per match rather than every frame (more variety per GB). Before downloading
+   at scale, `scripts/pipeline_improvement_1/phase3/fullmatch_probe.py` (3 matches by default) checks: (a) HQ
+   resolution per file (not assumed 1080p), (b) each half's start offset from `video.ini` (HQ files include
+   pre-match footage), (c) leakage: GSR `game_id` is a local index, not a SoccerNet match name, so the probe
+   finds held-out clips in a match from the pixels (clip game time + `video.ini` offset, dHash on 5 frames) and
+   writes `exclude.txt`; every match holding a `select`/`test` clip is excluded. `--map_all` maps every GSR
+   clip to its match, which cross-fitting by game needs. Keep only high-confidence, trajectory-consistent
+   labels; audit a random sample by hand.
+2. Distil into the students already planned: main detector with 2 frame-difference channels, c5c retrained,
+   both trained on GSR labels + filtered pseudo-labels, gated by the kill criterion (>= +0.5 pp recall, <= 1 pp
+   precision loss) and the §1.4 latency budget.
+
+#### Open questions
+
+1. ~~SoccerNet full-match source~~ decided: `videos-HQ` (above). Still open: actual HQ resolution per match and
+   leakage, answered by running `fullmatch_probe.py` (needs the gated Hugging Face repo's terms accepted and
+   `huggingface-cli login`).
+2. Where teacher training runs: the RTX 3090 (24 GB, preferred for full-res) or Kaggle (T4 16 GB, P100) for
+   parallel runs; full-res T2 at batch >= 4 may not fit 16 GB.
+3. Licences of the pretrained weights used for initialisation (Ultralytics AGPL-3.0 for YOLO weights; check
+   each DETR/HRNet checkpoint) -- the teacher is internal, but the students ship.
 
 **Goal:** Make specialist recovery work on realistic, difficult pipeline
 failures.

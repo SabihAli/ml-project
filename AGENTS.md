@@ -75,7 +75,7 @@ cv_service/
 │   ├── ball_temporal/         # Ball specialist v2 (BALL_TEMPORAL_PLAN.md): main-detector cache, 3-frame dataset, heatmap model, training, export
 │   ├── ball_eval/             # Ball system evaluation shared by plans: gates 1-3, tracker sim, miss diagnosis
 │   ├── ball_improvement/      # BALL_IMPROVEMENT_PLAN.md Kaggle notebook builder
-│   └── pipeline_improvement_1/phase0/  # PIPELINE_IMPROVEMENT_PLAN_1.md Phase 0: baseline + miss breakdown (Kaggle)
+│   └── pipeline_improvement_1/<phase>/ # PIPELINE_IMPROVEMENT_PLAN_1.md, one folder per phase (phase3b: offline ball teacher)
 ├── tests/                     # pytest, pure logic only (see Testing)
 ├── runs/yolo26s_athlete_ball/ # Path B detector: best.pt + exported ONNX and sidecars (tracked); everything else under runs/ is gitignored
 ├── archive/path_a/            # Path A (4-class YOLOv8n, team.py, team_live.py, pitch_view_gate.py), archived 2026-10-25; not imported
