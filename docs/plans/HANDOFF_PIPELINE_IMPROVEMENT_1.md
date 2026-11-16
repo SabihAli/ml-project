@@ -71,7 +71,7 @@ is excluded (frames preloaded); live needs NVDEC or a decode thread.
 5. **Teacher T2 done 2026-11-15** (`docs/results/PIPELINE_IMPROVEMENT_1_PHASE3B_TEACHER.md`): YOLO26s at 1920 with
    motion channels, test 84.93% / 93.49%; with the offline trajectory pass 88.06% / 93.89%, gate met at the margin.
    T1 (5-frame heatmap net) alone is weaker (83.79% with the pass) but the fused T2 + T1 candidates (`fuse_candidates.py`,
-   weight 0.7 on T2) give test 88.41% / 93.83% (88.17% without SNGS-050). Next: 7-channel YOLO26m
+   weight 0.7 on T2) give test 88.41% / 93.83% (88.17% without SNGS-050). 7-channel YOLO26m (tried 2026-11-16, not adopted: 86.82% fused; teacher stays T2 + T1 + pass)
    (`train_teacher_yolo_motion.py train --dts 1,2 --arch yolo26m --init yolo26m.pt --src_class "sports ball"`, ~85 min/epoch,
    24.5 GB at batch 4), then re-fuse. The user runs full training themselves; agents smoke-test and hand over
    commands.

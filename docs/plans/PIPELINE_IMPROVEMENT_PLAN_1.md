@@ -2,7 +2,7 @@
 
 ## Ball Detection: Recall, Robustness, and Real-Time Performance
 
-**Status:** In progress. Phase 0 closed 2026-11-09, Phase 1 closed 2026-11-10, Phase 4 closed 2026-11-11 (reverted: no tracker beat Phase 1); Phase 3 in progress (3a done 2026-11-12: mining + multi-peak, multi-peak reverted; RTX 3090 latency baseline 2026-11-14: e2e p50 23.9 / p95 63.7 ms; latency fixes 2026-11-14 (async calibration gated to frame ticks, CUDA streams, c5c GPU preprocessing, motion 480 px): e2e p95 28.7 ms; 3b teacher T2 + offline trajectory pass 2026-11-15: test 88.06% / 93.89%, gate met at the margin; T1 + T2 ensemble 2026-11-15: test 88.41% / 93.83%; next 7-channel YOLO26m; see `docs/plans/HANDOFF_PIPELINE_IMPROVEMENT_1.md`), then 2 -> 5 -> 6 (§5).\
+**Status:** In progress. Phase 0 closed 2026-11-09, Phase 1 closed 2026-11-10, Phase 4 closed 2026-11-11 (reverted: no tracker beat Phase 1); Phase 3 in progress (3a done 2026-11-12: mining + multi-peak, multi-peak reverted; RTX 3090 latency baseline 2026-11-14: e2e p50 23.9 / p95 63.7 ms; latency fixes 2026-11-14 (async calibration gated to frame ticks, CUDA streams, c5c GPU preprocessing, motion 480 px): e2e p95 28.7 ms; 3b teacher T2 + offline trajectory pass 2026-11-15: test 88.06% / 93.89%, gate met at the margin; T1 + T2 ensemble 2026-11-15: test 88.41% / 93.83%; 7-channel YOLO26m 2026-11-16 not adopted (86.82% fused); teacher = T2 + T1 + pass; see `docs/plans/HANDOFF_PIPELINE_IMPROVEMENT_1.md`), then 2 -> 5 -> 6 (§5).\
 **Primary objective:** Reach **90%+ ball-detection recall** while
 retaining real-time performance within the existing system's end-to-end
 latency budget.\
@@ -815,7 +815,8 @@ Scripts: `scripts/pipeline_improvement_1/phase3b/train_teacher_yolo.py` (build m
 **T1 + ensemble (2026-11-15):** T1 alone is weaker (test 77.80% raw, 83.79% with the pass; plateaued from epoch ~9,
 early-stopped at 15), but its candidates cover different frames (top-5 within 15 px: T2 93.3%, union 95.3% on test).
 **Fused 0.7 x T2 + 0.3 x T1, then the pass: test 88.41% / 93.83%, 88.17% without SNGS-050** (weight and knobs on
-`select`). Next: T2 with 7 channels (grey t-2, t-1, t+1, t+2) on YOLO26m, COCO init (no football-trained m exists).
+`select`). **7-channel YOLO26m (2026-11-16): not adopted** -- alone 80.67%, fused with T1 86.82%, three-way lower on select than
+T2 + T1. **Teacher = T2 + T1 fused + trajectory pass (88.41% / 93.83%).**
 
 **Decision (user, 2026-11-14):** train our own teacher, initialised from open-source pretrained weights; no
 off-the-shelf ball detector is the teacher. Candidates are chosen for the **best small-object F1**, and the

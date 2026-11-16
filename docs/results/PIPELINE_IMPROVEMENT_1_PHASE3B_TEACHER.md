@@ -82,6 +82,25 @@ scores higher on test (89.01%) but was not the select choice. Still a thin margi
 will lose some recall, so the next teacher is a 7-channel T2 (grey t-2, t-1, t+1, t+2) on YOLO26m, COCO init with the
 head from COCO's `sports ball` row (smoke test: 24.5 GB at batch 4, ~85 min/epoch), to be re-fused with T1.
 
+## 7-channel YOLO26m (`t2m7_m1920_coco`, 2026-11-16): not adopted
+
+YOLO26m at 1920, 7 channels (BGR(t) + grey t-2, t-1, t+1, t+2), COCO init, head from COCO's `sports ball` row;
+batch 4, 16 epochs. Val mAP50 0.668 at epoch 11 (T2: 0.660), flat from epoch ~6 while train loss kept falling.
+Same top-5 coverage as T2 (test 93.26% vs 93.29%), but it ranks the ball first less often:
+
+| test (15 seq), choices on select | select R | test recall | test precision | w/o SNGS-050 R |
+|---|---|---|---|---|
+| m7 raw top-1 | 79.57% | 80.67% | 95.11% | 80.39% |
+| m7 + trajectory pass | 82.87% | 85.09% | 94.75% | 84.58% |
+| m7 + T1 fused (a 0.8; select flat 85.6-85.8% for a 0.5-0.8) + pass | 85.81% | 86.82% | 94.43% | 86.39% |
+| T2 + m7 + T1 three-way (best on select: 0.85 / 0.8) + pass | 87.29% | 89.31% | 94.21% | 88.97% |
+| **T2 + T1 fused + pass (kept)** | **87.49%** | **88.41%** | **93.83%** | **88.17%** |
+
+The three-way fusion scores higher on test but lower on select (all six weight pairs 86.7-87.3% vs 87.49%), so by the
+select rule it is not chosen; the select differences are within noise either way. Bigger model + more frames did not
+help; losing the football init likely cost the ranking. **Teacher for the students: T2 + T1 fused (0.7 / 0.3) + the
+trajectory pass, test 88.41% / 93.83%.**
+
 ## Training
 
 `scripts/pipeline_improvement_1/phase3b/train_teacher_yolo_motion.py train --batch 4 --epochs 30 --patience 5`,
@@ -141,4 +160,5 @@ P/R 0.59/0.41 within 52 steps. The stopped YOLO26l run used COCO init and was no
    (`train_teacher_heatmap.py`): ResNet-34 U-Net on 5 RGB frames t-2..t+2 instead of HRNet (torchvision weights,
    no new dependency; c5c's proven design). Smoke test: 4.5 GB at batch 8, ~43 img/s, full-frame inference
    ~15 fps; select recall 45% at 90% precision after 120 steps on 8 sequences.
-3. **7-channel YOLO26m** (`--dts 1,2 --arch yolo26m`), then re-fuse with T1 and re-run the pass.
+3. ~~**7-channel YOLO26m**~~ done (above): worse than T2, not adopted.
+4. Produce the teacher's labels on the student training data (next phase step).
