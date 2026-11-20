@@ -2,7 +2,7 @@
 
 ## Ball Detection: Recall, Robustness, and Real-Time Performance
 
-**Status:** In progress. Phase 0 closed 2026-11-09, Phase 1 closed 2026-11-10, Phase 4 closed 2026-11-11 (reverted: no tracker beat Phase 1); Phase 3 in progress (3a done 2026-11-12: mining + multi-peak, multi-peak reverted; RTX 3090 latency baseline 2026-11-14: e2e p50 23.9 / p95 63.7 ms; latency fixes 2026-11-14 (async calibration gated to frame ticks, CUDA streams, c5c GPU preprocessing, motion 480 px): e2e p95 28.7 ms; 3b teacher T2 + offline trajectory pass 2026-11-15: test 88.06% / 93.89%, gate met at the margin; T1 + T2 ensemble 2026-11-15: test 88.41% / 93.83%; 7-channel YOLO26m 2026-11-16 not adopted (86.82% fused); teacher = T2 + T1 + pass; see `docs/plans/HANDOFF_PIPELINE_IMPROVEMENT_1.md`), then 2 -> 5 -> 6 (§5).\
+**Status:** In progress. Phase 0 closed 2026-11-09, Phase 1 closed 2026-11-10, Phase 4 closed 2026-11-11 (reverted: no tracker beat Phase 1); Phase 3 in progress (3a done 2026-11-12: mining + multi-peak, multi-peak reverted; RTX 3090 latency baseline 2026-11-14: e2e p50 23.9 / p95 63.7 ms; latency fixes 2026-11-14 (async calibration gated to frame ticks, CUDA streams, c5c GPU preprocessing, motion 480 px): e2e p95 28.7 ms; 3b teacher T2 + offline trajectory pass 2026-11-15: test 88.06% / 93.89%, gate met at the margin; T1 + T2 ensemble 2026-11-15: test 88.41% / 93.83%; 7-channel YOLO26m 2026-11-16 not adopted (86.82% fused); teacher = T2 + T1 + pass; 3b.2 closed 2026-11-17: T2 + T1 + global decode, test 89.44% / 93.51% (lag-tolerant 92.94%; GSR labels lag fast balls); see `docs/plans/HANDOFF_PIPELINE_IMPROVEMENT_1.md`), then 2 -> 5 -> 6 (§5).\
 **Primary objective:** Reach **90%+ ball-detection recall** while
 retaining real-time performance within the existing system's end-to-end
 latency budget.\
@@ -818,6 +818,37 @@ early-stopped at 15), but its candidates cover different frames (top-5 within 15
 `select`). **7-channel YOLO26m (2026-11-16): not adopted** -- alone 80.67%, fused with T1 86.82%, three-way lower on select than
 T2 + T1. **Teacher = T2 + T1 fused + trajectory pass (88.41% / 93.83%).**
 
+#### Phase 3b.2 --- Improving the teacher (plan, 2026-11-16)
+
+The user wants a teacher well past the 88% gate (students lose some recall). Miss analysis on `select` (T2 + T1
+fused + pass, 7,074 ball frames; test untouched): hit 87.2%; **wrong pick with the right candidate in the top 5,
+6.6%**; no candidate near the ball, 3.9%; right candidate below the threshold, 1.3%; nearest candidate 15-30 px,
+1.1%. Of the wrong picks, 291/465 are 15-60 px from the ball and 42% of those sit on the ball's position at t+-1/2
+(motion ghosts from the neighbour channels); each also costs precision. The local pass cannot separate a ghost
+from the ball (both have neighbour support). Steps, cheapest first; knobs on `select`, test read once per step:
+
+1. **Global trajectory decoding** (`decode_trajectory.py`, CPU): one best path per clip through the candidates
+   (DP with a motion penalty, frame skips, resets after long gaps), output score from support along the path, gap
+   fill along it, optional position smoothing. Targets wrong picks, below-threshold and 15-30 px misses (~9%).
+2. **Fusion position rule** (`fuse_candidates.py --pos max`): keep the stronger model's position instead of the
+   score-weighted mean, so a ghost and the ball do not merge into a point between them.
+3. **Test-time augmentation** (GPU inference only): T2 and T1 also on flipped and 2304 px frames, candidates pooled;
+   targets the 3.9% with no candidate.
+4. **Label audit**: 30-40 near-miss frames by eye; if GSR ball labels lag on fast balls, that sets the ceiling.
+5. **Retraining** only after 1-4: T2 on every frame (3x data), ghost positions as hard negatives.
+
+Status 2026-11-17 (phase closed): step 1 done, **test 89.44% / 93.51%** (select 88.30%), adopted; step 2 no gain,
+not adopted; step 3 (TTA) coverage 95.1 -> 96.7% but select 88.22% (tie), not adopted (test 90.16% if the user
+overrides); step 4: most near misses are GSR labels lagging fast balls (mean +0.2 frames), lag-tolerant test recall
+92.94%; **step 5 dropped**: ghost hard negatives would push the model off the real ball, and retraining cannot
+beat label noise on the 15 px metric. **Teacher: T2 + T1 fused (0.7 / 0.3) + global decode.** Next phase step:
+produce the teacher labels for the students; report lag-tolerant recall beside strict recall.
+Details: `docs/results/PIPELINE_IMPROVEMENT_1_PHASE3B_TEACHER.md`.
+
+All steps are fixed post-processing or inference with a handful of knobs chosen on `select`, so they apply
+unchanged to any clip the teacher labels; `test` measures that. Velocity knobs are in px/frame and assume 1080p
+at 25 fps like GSR; other footage must be resampled to that or the knobs rescaled.
+
 **Decision (user, 2026-11-14):** train our own teacher, initialised from open-source pretrained weights; no
 off-the-shelf ball detector is the teacher. Candidates are chosen for the **best small-object F1**, and the
 teacher runs at **full resolution** (1920x1080, no downscale). Inference cost is irrelevant to the teacher
@@ -886,6 +917,88 @@ The teacher on `test`, full resolution, best configuration chosen on `select`:
 2. Distil into the students already planned: main detector with 2 frame-difference channels, c5c retrained,
    both trained on GSR labels + filtered pseudo-labels, gated by the kill criterion (>= +0.5 pp recall, <= 1 pp
    precision loss) and the §1.4 latency budget.
+
+#### Phase 3b.3 --- Pseudo-labelling full matches (in progress, 2026-11-17)
+
+**Probe (3 matches, 2026-11-17).** `videos-HQ` is not all 1080p: 1 of 3 matches was 1920x1080, 2 were 1280x720
+(all 25 fps). Half start offsets in `video.ini`: 44-516 s. Leakage: none of the 25 select/test clips found
+(best dHash distances 15-25 of 64, threshold 8); the check has not yet been shown to catch a true positive.
+
+**Remote screen.** ffprobe reads each match's `1_HQ.mkv` header over HTTP (Hugging Face token, no download,
+~3-5 s per match): **171 of 500 matches are 1920x1080**; 324 are 1280x720, 5 other. Only 1080p matches are
+downloaded. A half at 50 fps is skipped (the decode knobs are px/frame at 25 fps).
+
+**Run.** `scripts/pipeline_improvement_1/phase3b/pseudo_label_matches.py`, one match at a time (the next downloads
+while the current is labelled): per-half 1080p25 check, dHash leakage scan for every select/test clip (a hit
+excludes the match, `exclude.txt`), 3 windows of 60 s per half spread over the half after its `video.ini` start
+(jittered, seeded by match name), frames extracted at native rate as JPEG quality 90 (~330 KB, matching GSR's own
+~300 KB frames; q95 was 0.9 GB/min), labelled by `pseudo_label.label_dir` (the evaluated teacher, threshold 0.06;
+every decoded path node is kept in `labels.json` so a stricter set needs no rerun), then the match's videos are
+deleted. **Disk cap 150 GB** on `data/pseudo_labels/phase3b_teacher/` (G: had 280 GB free), plus a stop at
+< 25 GB free. ~18-22 min per match on the RTX 3090 (T2 ~27 fps, T1 ~14.6 fps). As of 2026-11-18: 39 matches,
+345k frames, 237k with a ball label at 0.06, 0 matches excluded, 6 halves skipped (50 fps); the cap stops it at
+~44 matches (~385k frames, ~255 min, ~3x all of GSR).
+
+**Athlete labels (decided 2026-11-18: option 1).** The pseudo-labels hold the ball only. The main-detector student
+detects athletes too, so training it on these frames as they are would teach it that every athlete is
+background. Options were (1) pseudo-label athletes with a strong offline detector, (2) mask the athlete loss on
+pseudo frames (custom Ultralytics trainer), (3) pseudo frames for c5c only. **Chosen: (1)**, a separate pass over
+the frames already on disk (no re-download):
+
+1. Athlete-teacher candidates, scored on GSR `select` athletes (recall at precision >= the current detector's,
+   then F1), frozen, reported once on `test` and test w/o SNGS-050:
+   (a) the current detector `runs/yolo26s_athlete_ball` at 1280 (the baseline),
+   (b) the same weights at 1920,
+   (c) a YOLO26l fine-tuned on GSR athletes at 1920 (COCO init; training command handed to the user).
+2. Run the chosen athlete teacher over every pseudo-labelled frame, athlete class only (its ball output is
+   dropped; the ball comes from the Phase 3b ball teacher). Merge into `yolo/*.txt` as class 0 athletes + class 1
+   ball, the detector's contract.
+3. Audit a random sample of merged frames by hand (missed athletes, boxes on crowd/staff/benches), together with
+   the ball-label audit.
+4. Then distil (After the gate, step 2): the main detector on GSR + merged pseudo-labels, c5c on GSR +
+   ball pseudo-labels.
+
+### Phase 3c --- Distillation into the live students (in progress, 2026-11-19)
+
+Decided with the user 2026-11-19, run end to end without check-ins (`scripts/pipeline_improvement_1/phase3c/
+run_phase3c.py`, resumable stage by stage):
+
+1. **More ball pseudo-labels:** the cap is raised from 150 to 230 GB (~20 more matches). If G: runs short, the
+   VoxBlink / VoxCeleb datasets on G: may be deleted (user, 2026-11-19).
+2. **Athlete teacher:** YOLO26s (the ball teacher's size) at imgsz 1920, 3 channels, fine-tuned from the live
+   detector on GSR (train + pool; `select` for validation), `athlete_teacher.py`. Its confidence is the best F1 on
+   `select`, frozen; scored once on `test`. The earlier option of scoring the live detector at 1280/1920 as a teacher
+   was dropped by the user.
+3. **Athlete labels** on every pseudo window (`athlete_teacher.py label`); ball class from the ball teacher only.
+   `make_pseudo_seqs.py` writes each window as a GSR-format sequence (hard links, `Labels-GameState.json`) under
+   `data/pseudo_gsr/test/`, i.e. gsr_io's `pool` split: clips the live detector never trained on, so c5c's builder
+   samples their hard frames. **Ball labels: fixed floor 0.4** (user, 2026-11-19); frames the teacher labelled at
+   0.06 but below 0.4 are listed in `info.ignore_frames` and kept out of the YOLO lists (the ball is probably there:
+   not a positive, not a safe negative). Close-ups and replays get no labels from either teacher.
+4. **Detector student:** YOLO26s, 2 classes, **5 channels only** (user): B, G, R of t + grey of t-2 and t-1 (past
+   frames only, so it runs live; the teacher's t+1 is not available live), imgsz 1280, init from the live detector
+   (first conv inflated, grey weights zero; the whole head carries over). Data: GSR train + pool (every 3rd frame)
+   + pseudo (every 5th, minus ignored). Scored on `select`/`test` against the live detector with the teachers'
+   scorers (ball: one box per frame @15 px, threshold at select precision >= 90%; athletes: IoU 0.5, best select F1).
+   Running it live needs the runtime changes (5-channel ONNX sidecar, frame ring, TensorRT engine) -- not part of
+   this phase.
+5. **c5c student:** same recipe as c5c (5 ch, motion blur 0.25), warm start from c5c, 15 epochs, on c5c's GSR crops +
+   pseudo crops (easy positives every 9th frame, hard every 2nd: disk). Main-detector cache from the live
+   detector (the runtime centres windows on it). Scored with `eval_ball_temporal.py all` against c5c on the same
+   cache and crops.
+
+**Changes 2026-11-20 (user):**
+- The athlete teacher trains on the athlete class only (`build_athlete_data.py`, 1 class), not on the
+  2-class mirror: ball labels come from the ball teacher alone. Result (IoU 0.5, conf 0.30 from select):
+  test R / P / F1 96.28 / 97.51 / 96.89% vs the live detector's 95.08 / 95.63 / 95.35%.
+- **Students train on teacher labels only.** GSR's train and pool sequences are relabelled by both teachers
+  (`relabel_gsr.py` -> `data/gsr_teacher/`, same folders and names); select and test keep GSR's labels for
+  scoring. Both students read `data/gsr_teacher,data/pseudo_gsr`.
+- Detector student: up to 20 epochs, patience 5, batch 6 (batch 16 spilled past 24 GB beside the cache build).
+- `run_phase3c.py` runs the detector branch and the c5c branch in parallel after `pseudo_seqs`.
+
+Nothing under `runs/` that the pipeline loads is replaced: new runs go to `runs/teacher/a1_s1920_ft`,
+`runs/student/d1_s1280_c5`, `runs/student/b1_c5c_pseudo`; adopting one is a separate, reviewed decision.
 
 #### Open questions
 

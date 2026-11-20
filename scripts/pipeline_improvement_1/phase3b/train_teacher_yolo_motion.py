@@ -40,6 +40,9 @@ from gsr_io import SeqReader, discover, parse_labels  # noqa: E402
 # An environment variable, not argv, so spawned dataloader workers (which re-import this file) agree.
 DTS = tuple(sorted(int(d) for d in os.environ.get("TEACHER_DTS", "1").split(",")))
 OFFS = tuple(-d for d in reversed(DTS)) + DTS     # channel order after B, G, R: t-max .. t-1, t+1 .. t+max
+if os.environ.get("TEACHER_OFFS"):                 # explicit offsets, e.g. "-2,-1" for a causal (live) student
+    OFFS = tuple(int(o) for o in os.environ["TEACHER_OFFS"].split(","))
+    DTS = (max(abs(o) for o in OFFS),)
 CH = 3 + len(OFFS)
 _STEM = re.compile(r"^(.*)_(\d{6})$")
 
@@ -162,6 +165,9 @@ def _candidates_per_frame(model, refs, a, topk: int, conf: float) -> dict:
         for s in range(0, len(frames), a.eval_batch):
             fs = frames[s:s + a.eval_batch]
             ims = [stack(get(f), [get(f + o) for o in OFFS]) for f in fs]
+            W0 = ims[0].shape[1]
+            if getattr(a, "tta_flip", False):
+                ims = [np.ascontiguousarray(im[:, ::-1]) for im in ims]
             for k in [k for k in cache if k < fs[0] - max(DTS)]:
                 del cache[k]
             res = model.predict(ims, imgsz=a.imgsz, conf=conf, iou=0.5, max_det=a.max_det,
@@ -173,7 +179,9 @@ def _candidates_per_frame(model, refs, a, topk: int, conf: float) -> dict:
                     continue
                 order = b.conf.argsort(descending=True)[:topk].tolist()
                 xy, cf = b.xyxy.tolist(), b.conf.tolist()
-                preds[f] = [((xy[j][0] + xy[j][2]) / 2, (xy[j][1] + xy[j][3]) / 2, cf[j]) for j in order]
+                cx = lambda j: (xy[j][0] + xy[j][2]) / 2  # noqa: E731
+                preds[f] = [((W0 - cx(j)) if getattr(a, "tta_flip", False) else cx(j),
+                             (xy[j][1] + xy[j][3]) / 2, cf[j]) for j in order]
         out[r.name] = preds
         print(f"  [{i}/{len(refs)}] {r.name}: {len(frames) / (time.time() - t0):.1f} fps", flush=True)
     return out
@@ -183,7 +191,7 @@ def dump(a) -> None:
     """Top-k candidates per frame + GT on select and test, for trajectory_pass.py (one JSON per split)."""
     from ultralytics import YOLO
     model = YOLO(str(a.weights))
-    out = base.DATA_OUT / "candidates" / a.weights.parent.parent.name
+    out = base.DATA_OUT / "candidates" / (a.dump_name or a.weights.parent.parent.name)
     out.mkdir(parents=True, exist_ok=True)
     for split in ("select", "test"):
         refs = [r for r in discover(a.src) if r.split == split]
@@ -221,6 +229,8 @@ def main() -> None:
     ap.add_argument("--project", type=Path, default=base.ROOT / "runs" / "teacher")
     ap.add_argument("--name", default="t2m_s1920_ft")
     ap.add_argument("--resume", action="store_true")
+    ap.add_argument("--tta_flip", action="store_true", help="dump: mirror frames horizontally (points mapped back)")
+    ap.add_argument("--dump_name", default=None, help="dump: output folder name under candidates/")
     ap.add_argument("--src_class", default="ball",
                     help="init class whose head row starts the ball head ('sports ball' for a COCO init)")
     ap.add_argument("--dts", default=None, help="neighbour offsets, e.g. 1,2 for 7 channels (sets TEACHER_DTS)")

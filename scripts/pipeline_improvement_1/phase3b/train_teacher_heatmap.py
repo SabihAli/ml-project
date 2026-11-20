@@ -232,8 +232,10 @@ def peaks(logits, off, k: int, min_conf: float, nms: int = 7):
 # -- full-frame inference -----------------------------------------------------------------
 
 @torch.no_grad()
-def infer_seq(model, s: Seq, dev, batch: int, k: int, min_conf: float, every: int = 1) -> dict:
-    """{frame: [(x, y, conf), ...]} on full frames (padded to a multiple of 32), every `every`-th frame."""
+def infer_seq(model, s: Seq, dev, batch: int, k: int, min_conf: float, every: int = 1,
+              flip: bool = False, scale: float = 1.0) -> dict:
+    """{frame: [(x, y, conf), ...]} on full frames (padded to a multiple of 32), every `every`-th frame.
+    Test-time augmentation: `flip` mirrors the input horizontally, `scale` resizes it; points are mapped back."""
     model.eval()
     cache: dict[int, np.ndarray] = {}
 
@@ -251,13 +253,19 @@ def infer_seq(model, s: Seq, dev, batch: int, k: int, min_conf: float, every: in
         for f in [f for f in cache if f < lo]:
             del cache[f]
         x = torch.from_numpy(x).to(dev).permute(0, 3, 1, 2)
+        H0, W0 = x.shape[-2:]
+        if flip:
+            x = x.flip(-1)
+        if scale != 1.0:
+            x = F.interpolate(x.float(), scale_factor=scale, mode="bilinear", align_corners=False)
         H, W = x.shape[-2:]
         ph, pw = (-H) % PAD_TO, (-W) % PAD_TO
         x = F.pad(normalise(x), (0, pw, 0, ph))
         with torch.autocast("cuda", enabled=dev.type == "cuda"):
             logits, off = model(x)
         for kidx, row in zip(kk, peaks(logits, off, k, min_conf)):
-            out[s.frames[kidx]] = [(px, py, c) for px, py, c in row if px < W and py < H]
+            pts = [(px / scale, py / scale, c) for px, py, c in row if px < W and py < H]
+            out[s.frames[kidx]] = [((W0 - 1 - px) if flip else px, py, c) for px, py, c in pts]
     return out
 
 
@@ -362,7 +370,7 @@ def dump(a) -> None:
         doc = {"weights": str(a.weights), "topk": a.topk, "conf": a.dump_conf, "seqs": {}}
         for i, s in enumerate(seqs, 1):
             t0 = time.time()
-            c = infer_seq(model, s, dev, a.val_batch, a.topk, a.dump_conf)
+            c = infer_seq(model, s, dev, a.val_batch, a.topk, a.dump_conf, flip=a.tta_flip, scale=a.tta_scale)
             doc["seqs"][s.name] = {"cands": {str(f): r for f, r in c.items()},
                                    "gt": {str(f): [(x, y) for x, y, _ in s.balls[f]] for f in s.frames}}
             print(f"  [{i}/{len(seqs)}] {s.name}: {len(s.frames) / (time.time() - t0):.1f} fps", flush=True)
@@ -373,6 +381,8 @@ def dump(a) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Phase 3b teacher T1: multi-frame heatmap at native resolution")
     ap.add_argument("step", choices=["train", "dump"])
+    ap.add_argument("--tta_flip", action="store_true", help="dump: mirror frames horizontally")
+    ap.add_argument("--tta_scale", type=float, default=1.0, help="dump: resize frames by this factor")
     ap.add_argument("--src", type=Path, default=base.ROOT / "data" / "gsr")
     ap.add_argument("--backbone", default="resnet34", choices=["resnet18", "resnet34", "resnet50"])
     ap.add_argument("--no_pretrained", action="store_true")

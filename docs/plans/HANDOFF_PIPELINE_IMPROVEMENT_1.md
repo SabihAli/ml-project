@@ -72,6 +72,9 @@ is excluded (frames preloaded); live needs NVDEC or a decode thread.
    motion channels, test 84.93% / 93.49%; with the offline trajectory pass 88.06% / 93.89%, gate met at the margin.
    T1 (5-frame heatmap net) alone is weaker (83.79% with the pass) but the fused T2 + T1 candidates (`fuse_candidates.py`,
    weight 0.7 on T2) give test 88.41% / 93.83% (88.17% without SNGS-050). 7-channel YOLO26m (tried 2026-11-16, not adopted: 86.82% fused; teacher stays T2 + T1 + pass)
+   Phase 3b.2 (plan §3b.2, closed 2026-11-17): global decode (`decode_trajectory.py`) lifts it to test 89.44% / 93.51%;
+   TTA a select tie (not adopted); label audit: GSR labels lag fast balls, lag-tolerant test recall 92.94%. Next:
+   teacher labels for the students.
    (`train_teacher_yolo_motion.py train --dts 1,2 --arch yolo26m --init yolo26m.pt --src_class "sports ball"`, ~85 min/epoch,
    24.5 GB at batch 4), then re-fuse. The user runs full training themselves; agents smoke-test and hand over
    commands.

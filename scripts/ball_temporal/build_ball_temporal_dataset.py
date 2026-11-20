@@ -156,7 +156,9 @@ def _tracker_centres(files, dets, motion, pred_conf, tracker_cfg: dict | None) -
 
 def process_sequence(job):
     import cv2
-    ref, cache_dir, out, seed, pred_conf, quality, centre_mode, motion_dir, gap2_repeat, tracker_cfg = job
+    ref, cache_dir, out, seed, pred_conf, quality, centre_mode, motion_dir, gap2_repeat, tracker_cfg, *steps = job
+    pseudo = not ref.name.startswith("SNGS")              # Phase 3c pseudo-labelled windows (PSL-xxxxx)
+    easy_step, hard_step = (steps[0], steps[1]) if steps and pseudo else (EASY_STEP, 1)
     part = Path(out) / "parts" / f"{ref.name}.csv"
     if part.exists():
         with open(part, newline="") as f:
@@ -188,7 +190,9 @@ def process_sequence(job):
             gts = [(b[0], b[1]) for b in bt]
             hard = _matched_conf([d for d in dets.get(t, []) if d[4] >= pred_conf], gts) == 0.0
             sample_hard = hard and ref.split != "train"
-            if not sample_hard and t % EASY_STEP:
+            if not sample_hard and t % easy_step:
+                continue
+            if sample_hard and t % hard_step:
                 continue
             rng = np.random.default_rng([seed, ref.number, t])
             jobs = []        # (kind, x0, y0, clamped, points, meta)
@@ -281,7 +285,8 @@ def stage_build(a):
     if a.centre == "predicted":
         print(f"window centre: ball tracker prediction (motion {a.motion}, tracker config {a.tracker_config})", flush=True)
     jobs = [(r, str(a.cache), str(a.out), a.seed, a.pred_conf, a.jpeg_quality, a.centre,
-             str(a.motion) if a.motion else None, a.gap2_repeat, tracker_cfg) for r in refs]
+             str(a.motion) if a.motion else None, a.gap2_repeat, tracker_cfg, a.pseudo_easy_step, a.pseudo_hard_step)
+            for r in refs]
     t0, rows = time.time(), []
     with Pool(a.workers) as pool:
         for i, (name, r, cached) in enumerate(pool.imap_unordered(process_sequence, jobs), 1):
@@ -373,6 +378,9 @@ def main():
     ap.add_argument("--motion", type=Path, default=None, help="camera_motion_cache.py output (--centre predicted)")
     ap.add_argument("--tracker_config", type=Path, default=None,
                     help="tracker_config.json from eval_ball_temporal.py track (its `tracker` section)")
+    ap.add_argument("--pseudo_easy_step", type=int, default=EASY_STEP,
+                    help="Phase 3c pseudo windows (PSL-*): easy positives every k-th frame (disk budget)")
+    ap.add_argument("--pseudo_hard_step", type=int, default=1, help="PSL-*: hard positives every k-th frame")
     ap.add_argument("--gap2_repeat", type=int, default=1,
                     help="extra repeat factor for pool hard positives whose window centre is >= 2 frames old")
     a = ap.parse_args()

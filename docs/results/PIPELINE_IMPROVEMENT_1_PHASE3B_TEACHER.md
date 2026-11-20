@@ -101,6 +101,68 @@ select rule it is not chosen; the select differences are within noise either way
 help; losing the football init likely cost the ranking. **Teacher for the students: T2 + T1 fused (0.7 / 0.3) + the
 trajectory pass, test 88.41% / 93.83%.**
 
+## Phase 3b.2 steps 1-2: global decoding, fusion position rule (2026-11-16)
+
+Plan: `docs/plans/PIPELINE_IMPROVEMENT_PLAN_1.md` Phase 3b.2 (includes the miss analysis that motivated it).
+
+- **Step 2, fusion position = stronger model's point** (`fuse_candidates.py --pos max`): no gain. Local pass on
+  select 87.39% (a 0.7) vs 87.49% with the score-weighted mean. Not adopted; averaging did not cause the near misses.
+- **Step 1, global trajectory decoding** (`decode_trajectory.py`): one DP path per clip through the fused T2 + T1
+  (a 0.7) candidates, motion penalty, skips up to M frames, resets; output score = mean path conf over +-S frames;
+  gap fill along the path. 432-configuration search on select (26 min CPU), then a wider grid past the three edge
+  knobs picked the same: b=0.08, lam=0.05, sigma0=8, v=25, vmax=60, M=10, gamma=0, rho=0.2, S=1, G=10, thr 0.06.
+
+| T2 + T1 fused (a 0.7) | select R / P | test recall | test precision | F1 | R @5 px | w/o SNGS-050 R |
+|---|---|---|---|---|---|---|
+| + local trajectory pass (before) | 87.49% / 90.13% | 88.41% | 93.83% | 91.04% | 74.60% | 88.17% |
+| **+ global decode** | **88.30% / 90.01%** | **89.44%** | **93.51%** | **91.43%** | **75.46%** | **89.12%** |
+
++0.8 pp select, +1.0 pp test, precision -0.3 pp. **Teacher now: T2 + T1 fused + global decode, test 89.44% / 93.51%.**
+The decoder does not remove motion ghosts (a ghost track is as smooth as the ball's, one frame shifted); that and
+the 3.9% without a candidate remain (steps 3-5).
+
+## Phase 3b.2 step 3: test-time augmentation (2026-11-17)
+
+T2 and T1 each also run on horizontally flipped frames and upscaled frames (T2 at imgsz 2304, T1 at x1.2), points
+mapped back (`--tta_flip`, `--imgsz` / `--tta_scale`, `--dump_name`; check on one clip: top guess moves 0.5-1.1 px).
+Per model the three passes are averaged with `fuse_candidates.py` (equal weights), then T2-TTA and T1-TTA fused
+(a 0.6 / 0.7 / 0.8) and decoded; a, decoder knobs and threshold on select. GPU ~2 h for the four dumps.
+
+| | select top-5 coverage (any candidate <= 15 px) | select R / P | test R / P | w/o SNGS-050 R |
+|---|---|---|---|---|
+| T2 + T1 (no TTA) + decode | 95.09% | **88.30%** / 90.01% | 89.44% / 93.51% | 89.12% |
+| T2-TTA + T1-TTA (a 0.7) + decode (b 0.12, rho 0.2, thr 0.002) | **96.73%** | 88.22% / 90.23% | **90.16%** / 93.66% | 89.74% |
+
+**Not adopted by the select rule** (-0.08 pp select, a tie within noise), although it covers 1.6 pp more ball
+frames and scores +0.7 pp on test. Its chosen threshold sits at the grid floor (0.002): averaging three passes
+dilutes scores, so the extra candidates are hard to rank above the threshold. If the user prefers the test
+reading, it is the stronger teacher; the select rule says no. Costs 3x teacher inference.
+
+## Phase 3b.2 step 4: label audit (2026-11-17)
+
+`label_audit.py`. 40 random select near misses (pick 15-60 px from the label; 366 in total) judged by eye
+(sheet: `data/outputs/pipeline_improvement_1/phase3b/teacher_yolo/eval/label_audit_select.png`): **~24 have the
+pick on the visible ball and the label off it**, trailing the ball along its path; ~4 are real teacher errors
+(ball in a keeper's hands, at a player's head); ~12 cannot be judged from a 120 px crop. The "motion ghost" reading
+of step 1 was mostly backwards: the labels lag on fast balls, not the teacher.
+
+Measured on all fast-ball frames (>= 8 px/frame, pick within 60 px): the time offset at which the interpolated
+label track best matches the pick.
+
+| | fast-ball frames | label best matches later (>0) | same frame | earlier (<0) | mean offset | recall strict | recall lag-tolerant |
+|---|---|---|---|---|---|---|---|
+| select | 2,194 | 49% | 41% | 9% | +0.20 frames | 88.00% | 92.62% |
+| test | 3,045 | 56% | 34% | 10% | +0.23 frames | 89.43% | 92.94% |
+
+Lag-tolerant = a pick within 15 px of the label track anywhere between t-1 and t+1 counts. It is an upper bound
+(it also forgives a pick really one frame off); the eye audit suggests most of the gap is label error. Strict recall
+here counts slightly differently from `base.score` (88.00% vs 88.30% on select). So against GSR labels at 15 px the
+teacher is under-scored by up to ~3.5-4.5 pp, and recall measured this way cannot get far past the low 90s for any
+model. Consequences: (1) the old step 5 (ghost positions as hard negatives) would have trained the model away from
+the real ball, and is dropped; (2) teacher labels may place the ball more accurately than GSR's own on fast balls,
+which matters when training the students; (3) the strict 15 px metric stays the decision metric (comparable with
+everything before), with lag-tolerant recall reported beside it from now on.
+
 ## Training
 
 `scripts/pipeline_improvement_1/phase3b/train_teacher_yolo_motion.py train --batch 4 --epochs 30 --patience 5`,

@@ -29,6 +29,11 @@ Tag: `rtx-3090`. Accuracy only; the teacher is offline, its latency does not cou
 | T1 (5-frame ResNet-34 heatmap net) + trajectory pass | 83.79% | 92.04% | 87.72% |
 | **T2 + T1 fused (0.7 / 0.3) + trajectory pass** | **88.41%** | **93.83%** | 91.04% |
 | YOLO26m, 7 ch, COCO init, fused with T1 + pass (2026-11-16, not adopted) | 86.82% | 94.43% | 90.47% |
+| **T2 + T1 fused + global trajectory decode (2026-11-16)** | **89.44%** | **93.51%** | 91.43% |
+| same + TTA (flip, upscale) (2026-11-17, not adopted: select tie) | 90.16% | 93.66% | 91.87% |
+
+2026-11-17 label audit: GSR ball labels lag fast balls (mean +0.2 frames); lag-tolerant recall of the adopted teacher
+on test 92.94% (strict 89.43%).
 
 T2 threshold 0.05 from `select` (83.21% / 90.07%), not at the gate alone; with the trajectory pass (knobs and
 threshold from `select`) the gate (88% at >= 90%) is met at the margin, 87.72% without SNGS-050. 16 epochs x ~34 min, batch 4,
